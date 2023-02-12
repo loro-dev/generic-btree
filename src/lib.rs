@@ -1,6 +1,10 @@
-use std::{fmt::Debug, ops::Deref};
+use std::{
+    fmt::Debug,
+    ops::{Deref, Range},
+};
 
 use thunderdome::{Arena, Index as ArenaIndex};
+mod iter;
 
 pub trait BTreeTrait {
     type Elem: Debug;
@@ -37,7 +41,24 @@ pub trait Query: Default {
         offset: usize,
         found: bool,
     ) {
-        elements.remove(elem_index);
+        if found {
+            elements.remove(elem_index);
+        }
+    }
+
+    #[allow(unused)]
+    fn delete_range<'x, 'b>(
+        elements: &'x mut Vec<Self::Elem>,
+        query: &'b Self::QueryArg,
+        from: Option<QueryResult>,
+        to: Option<QueryResult>,
+    ) -> Box<dyn Iterator<Item = Self::Elem> + 'x> {
+        Box::new(match (from, to) {
+            (None, None) => elements.drain(..),
+            (None, Some(to)) => elements.drain(..to.elem_index),
+            (Some(from), None) => elements.drain(from.elem_index..),
+            (Some(from), Some(to)) => elements.drain(from.elem_index..to.elem_index),
+        })
     }
 }
 
@@ -53,7 +74,7 @@ pub struct FindResult {
     pub found: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Idx {
     pub arena: ArenaIndex,
     pub arr: usize,
@@ -180,6 +201,10 @@ impl<B: BTreeTrait> Node<B> {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     #[inline(always)]
     pub fn is_leaf(&self) -> bool {
         self.children.is_empty()
@@ -283,6 +308,53 @@ impl<B: BTreeTrait> BTree<B> {
         ans.found = result.found;
         ans.offset = result.offset;
         ans
+    }
+
+    pub fn drain<Q>(&mut self, range: Range<Q::QueryArg>) -> iter::Drain<B>
+    where
+        Q: Query<Cache = B::Cache, Elem = B::Elem>,
+    {
+        let from = self.query::<Q>(&range.start);
+        let to = self.query::<Q>(&range.end);
+        iter::Drain::new(self, from, to)
+    }
+
+    pub fn iter_mut<Q>(
+        &mut self,
+        range: Range<Q::QueryArg>,
+    ) -> impl Iterator<Item = &mut B::Elem> + '_
+    where
+        Q: Query<Cache = B::Cache, Elem = B::Elem>,
+    {
+        let start = self.query::<Q>(&range.start);
+        let end = self.query::<Q>(&range.end);
+        let mut node_iter = iter::IterMut::new(self, start.clone(), end.clone());
+        let mut elem_iter: Option<std::slice::IterMut<'_, B::Elem>> = None;
+        std::iter::from_fn(move || loop {
+            if let Some(inner_elem_iter) = &mut elem_iter {
+                match inner_elem_iter.next() {
+                    Some(elem) => return Some(elem),
+                    None => elem_iter = None,
+                }
+            } else {
+                match node_iter.next() {
+                    Some((idx, node)) => {
+                        let start = if idx.arena == start.node_path.last().unwrap().arena {
+                            start.elem_index
+                        } else {
+                            0
+                        };
+                        let end = if idx.arena == end.node_path.last().unwrap().arena {
+                            end.elem_index
+                        } else {
+                            node.elements.len()
+                        };
+                        elem_iter = Some(node.elements[start..end].iter_mut());
+                    }
+                    None => return None,
+                }
+            }
+        })
     }
 
     // at call site the cache at path can be out-of-date.
@@ -433,6 +505,33 @@ impl<B: BTreeTrait> BTree<B> {
             }
             self.nodes.remove(x);
         }
+    }
+
+    /// find the next sibling at the same level
+    fn next_sibling(&self, path: &mut [Idx]) -> bool {
+        if path.len() <= 1 {
+            return false;
+        }
+
+        let depth = path.len();
+        let parent_idx = path[depth - 2];
+        let this_idx = path[depth - 1];
+        let parent = self.get(parent_idx.arena);
+        match parent.children.get(this_idx.arr + 1) {
+            Some(next) => {
+                path[depth - 1] = Idx::new(*next, this_idx.arr + 1);
+            }
+            None => {
+                if !self.next_sibling(&mut path[..depth - 1]) {
+                    return false;
+                }
+
+                let parent = self.get(path[depth - 2].arena);
+                path[depth - 1] = Idx::new(parent.children[0], 0);
+            }
+        }
+
+        true
     }
 }
 
