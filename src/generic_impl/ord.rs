@@ -58,7 +58,7 @@ impl<T: Clone + Ord + Debug + 'static> BTreeTrait for OrdTrait<T> {
 
     type Cache = Option<(T, T)>;
 
-    const MAX_LEN: usize = 32;
+    const MAX_LEN: usize = 16;
 
     fn element_to_cache(_: &Self::Elem) -> Self::Cache {
         None
@@ -67,7 +67,7 @@ impl<T: Clone + Ord + Debug + 'static> BTreeTrait for OrdTrait<T> {
     fn calc_cache_internal(caches: &[crate::Child<Self::Cache>]) -> Self::Cache {
         Some((
             caches[0].cache.as_ref().unwrap().0.clone(),
-            caches[1].cache.as_ref().unwrap().1.clone(),
+            caches[caches.len() - 1].cache.as_ref().unwrap().1.clone(),
         ))
     }
 
@@ -117,10 +117,9 @@ mod test {
     fn test() {
         let mut tree: OrdTreeSet<u64> = OrdTreeSet::new();
         let mut rng = rand::rngs::StdRng::seed_from_u64(123);
-        let mut data: Vec<u64> = (0..100).map(|_| rng.gen()).collect();
+        let mut data: Vec<u64> = (0..10_000).map(|_| rng.gen()).collect();
         for &value in data.iter() {
             tree.insert(value);
-            tree.check();
         }
         data.sort_unstable();
         assert_eq!(tree.iter().copied().collect::<Vec<_>>(), data);

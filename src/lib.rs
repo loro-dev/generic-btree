@@ -10,7 +10,7 @@ pub use generic_impl::OrdTreeSet;
 
 pub trait BTreeTrait {
     type Elem: Debug + Clone;
-    type Cache: Debug + Default + Clone;
+    type Cache: Debug + Default + Clone + Eq;
     const MAX_LEN: usize;
 
     fn element_to_cache(element: &Self::Elem) -> Self::Cache;
@@ -525,7 +525,7 @@ impl<B: BTreeTrait> BTree<B> {
 
         self.inner_insert_node(
             path.parent_path(),
-            path.last().unwrap().arr,
+            path.this().arr,
             this_cache,
             Child {
                 arena: right,
@@ -548,9 +548,11 @@ impl<B: BTreeTrait> BTree<B> {
         } else {
             let parent_index = *parent_path.last().unwrap();
             let parent = self.get_mut(parent_index.arena);
-            parent.children.insert(index, node);
+            parent.children[index].cache = new_cache;
+            parent.children.insert(index + 1, node);
+            let parent = self.get_mut(parent_index.arena);
             if parent.is_full() {
-                self.split(parent_path)
+                self.split(parent_path);
             }
         }
     }
@@ -726,7 +728,7 @@ impl<B: BTreeTrait> BTree<B> {
     }
 }
 
-impl<Cache: Eq + Debug, B: BTreeTrait<Cache = Cache>> BTree<B> {
+impl<B: BTreeTrait> BTree<B> {
     #[allow(unused)]
     fn check(&self) {
         // check cache
@@ -741,6 +743,7 @@ impl<Cache: Eq + Debug, B: BTreeTrait<Cache = Cache>> BTree<B> {
 
         // TODO: check leaf at same level
         // TODO: check custom invariants
+        // TODO: check children num bound
     }
 }
 
