@@ -16,6 +16,9 @@ pub trait BTreeTrait {
     fn insert(elements: &mut Vec<Self::Elem>, index: usize, offset: usize, elem: Self::Elem) {
         elements.insert(index, elem);
     }
+
+    fn calc_cache_internal(caches: &[Child<Self::Cache>]) -> Self::Cache;
+    fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache;
 }
 
 pub trait Query: Default {
@@ -23,15 +26,13 @@ pub trait Query: Default {
     type Elem;
     type QueryArg: Debug + Clone;
 
-    fn find_node<'a, 'b, Iter>(&mut self, target: &'b Self::QueryArg, iter: Iter) -> FindResult
-    where
-        Iter: Iterator<Item = &'a Self::Cache>,
-        Self::Cache: 'a;
+    fn find_node(
+        &mut self,
+        target: &Self::QueryArg,
+        child_caches: &[Child<Self::Cache>],
+    ) -> FindResult;
 
-    fn find_element<'a, 'b, Iter>(&mut self, target: &'b Self::QueryArg, iter: Iter) -> FindResult
-    where
-        Iter: Iterator<Item = &'a Self::Elem>,
-        Self::Elem: 'a;
+    fn find_element(&mut self, target: &Self::QueryArg, elements: &[Self::Elem]) -> FindResult;
 
     #[allow(unused)]
     fn delete(
@@ -66,6 +67,7 @@ pub trait Query: Default {
 pub struct BTree<B: BTreeTrait> {
     nodes: Arena<Node<B>>,
     root: ArenaIndex,
+    root_cache: B::Cache,
 }
 
 pub struct FindResult {
@@ -124,17 +126,18 @@ impl<'a> PathRef<'a> {
         }
     }
 
-    pub fn parent_path<'b: 'a>(&'b self) -> PathRef<'b> {
+    pub fn parent_path(&self) -> PathRef<'a> {
         debug_assert!(self.len() > 1);
-        Self(&self[..self.len() - 1])
+        Self(&self.0[..self.len() - 1])
+    }
+
+    pub fn set_as_parent_path(&mut self) {
+        debug_assert!(self.len() > 1);
+        self.0 = &self.0[..self.len() - 1];
     }
 
     pub fn is_root(&self) -> bool {
         self.len() == 1
-    }
-
-    pub fn is_parent_root(&self) -> bool {
-        self.len() == 2
     }
 }
 
@@ -152,11 +155,28 @@ impl QueryResult {
     }
 }
 
+// TODO: use enum to save spaces
 #[derive(Debug)]
 struct Node<B: BTreeTrait> {
     elements: Vec<B::Elem>,
-    children: Vec<ArenaIndex>,
-    cache: B::Cache,
+    children: Vec<Child<B::Cache>>,
+}
+
+#[derive(Debug)]
+pub struct Child<Cache> {
+    arena: ArenaIndex,
+    cache: Cache,
+}
+
+impl<Cache> Child<Cache> {
+    #[inline(always)]
+    pub fn cache(&self) -> &Cache {
+        &self.cache
+    }
+
+    fn new(arena: ArenaIndex, cache: Cache) -> Self {
+        Self { arena, cache }
+    }
 }
 
 impl<B: BTreeTrait> Default for Node<B> {
@@ -171,7 +191,6 @@ impl<B: BTreeTrait> Node<B> {
         Self {
             elements: Vec::new(),
             children: Vec::new(),
-            cache: B::Cache::default(),
         }
     }
 
@@ -215,8 +234,13 @@ impl<B: BTreeTrait> Node<B> {
         !self.children.is_empty()
     }
 
-    fn update_cache(&mut self) {
-        todo!()
+    #[must_use]
+    fn calc_cache(&self) -> B::Cache {
+        if self.is_internal() {
+            B::calc_cache_internal(&self.children)
+        } else {
+            B::calc_cache_leaf(&self.elements)
+        }
     }
 }
 
@@ -224,7 +248,11 @@ impl<B: BTreeTrait> BTree<B> {
     pub fn new() -> Self {
         let mut arena = Arena::new();
         let root = arena.insert(Node::new());
-        Self { nodes: arena, root }
+        Self {
+            nodes: arena,
+            root,
+            root_cache: B::Cache::default(),
+        }
     }
 
     pub fn insert<Q>(&mut self, tree_index: &Q::QueryArg, data: B::Elem)
@@ -272,7 +300,10 @@ impl<B: BTreeTrait> BTree<B> {
         if is_full {
             self.split(result.path_ref());
         } else if is_lack {
-            self.handle_lack(result.path_ref());
+            let mut path_ref = result.path_ref();
+            while self.handle_lack(&path_ref) {
+                path_ref.set_as_parent_path();
+            }
         }
     }
 
@@ -290,20 +321,15 @@ impl<B: BTreeTrait> BTree<B> {
             found: false,
         };
         while node.is_internal() {
-            let result = finder.find_node(
-                query,
-                node.children
-                    .iter()
-                    .map(|n| &self.nodes.get(*n).unwrap().cache),
-            );
+            let result = finder.find_node(query, &node.children);
             let i = result.index;
             let i = i.min(node.children.len() - 1);
-            index = node.children[i];
+            index = node.children[i].arena;
             node = self.nodes.get(index).unwrap();
             ans.node_path.push(Idx::new(index, i));
         }
 
-        let result = finder.find_element(query, node.elements.iter());
+        let result = finder.find_element(query, &node.elements);
         ans.elem_index = result.index;
         ans.found = result.found;
         ans.offset = result.offset;
@@ -372,18 +398,32 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         // update cache
-        right.update_cache();
+        let right_cache = right.calc_cache();
         let right = self.nodes.insert(right);
-        self.update_cache(path.this().arena);
+        let this_cache = self.calc_cache(path.this().arena);
 
-        self.inner_insert_node(path.parent_path(), path.last().unwrap().arr, right);
+        self.inner_insert_node(
+            path.parent_path(),
+            path.last().unwrap().arr,
+            this_cache,
+            Child {
+                arena: right,
+                cache: right_cache,
+            },
+        );
         // don't need to recursive update cache
     }
 
     // call site should ensure the cache is up-to-date after this method
-    fn inner_insert_node(&mut self, parent_path: PathRef, index: usize, node: ArenaIndex) {
+    fn inner_insert_node(
+        &mut self,
+        parent_path: PathRef,
+        index: usize,
+        new_cache: B::Cache,
+        node: Child<B::Cache>,
+    ) {
         if parent_path.is_empty() {
-            self.split_root(node);
+            self.split_root(new_cache, node);
         } else {
             let parent_index = *parent_path.last().unwrap();
             let parent = self.get_mut(parent_index.arena);
@@ -394,20 +434,20 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn split_root(&mut self, node: ArenaIndex) {
+    fn split_root(&mut self, new_cache: B::Cache, new_node: Child<B::Cache>) {
         let root = self.get_mut(self.root);
         let left: Node<B> = std::mem::take(root);
-        let right = node;
-        let left = self.nodes.insert(left);
+        let right = new_node;
+        let left = Child::new(self.nodes.insert(left), new_cache);
         let root = self.get_mut(self.root);
         root.children.push(left);
         root.children.push(right);
-        root.update_cache();
+        self.root_cache = root.calc_cache();
     }
 
-    fn update_cache(&mut self, node: ArenaIndex) {
+    fn calc_cache(&mut self, node: ArenaIndex) -> B::Cache {
         let node = self.get_mut(node);
-        node.update_cache();
+        node.calc_cache()
     }
 
     #[inline(always)]
@@ -420,11 +460,15 @@ impl<B: BTreeTrait> BTree<B> {
         self.nodes.get(index).unwrap()
     }
 
-    // cache should be up-to-date when calling this
-    fn handle_lack(&mut self, path: PathRef) {
+    /// merge into or borrow from neighbor
+    ///
+    /// cache should be up-to-date when calling this
+    ///
+    /// return is parent lack
+    fn handle_lack(&mut self, path: &PathRef) -> bool {
         if path.is_root() {
             // ignore the lack of nodes problem for root
-            return;
+            return false;
         }
 
         match self.pair_neighbor(path.parent().unwrap().arena, path.this()) {
@@ -453,8 +497,12 @@ impl<B: BTreeTrait> BTree<B> {
                                 .splice(0..0, a.elements.drain(a.elements.len() - move_len..));
                         }
                     }
-                    a.update_cache();
-                    b.update_cache();
+                    let a_cache = a.calc_cache();
+                    let b_cache = b.calc_cache();
+                    let parent = self.get_mut(path.parent().unwrap().arena);
+                    parent.children[a_idx.arr].cache = a_cache;
+                    parent.children[b_idx.arr].cache = b_cache;
+                    parent.is_lack()
                 } else {
                     // merge b to a
                     if a.is_internal() {
@@ -462,38 +510,46 @@ impl<B: BTreeTrait> BTree<B> {
                     } else {
                         a.elements.append(&mut b.elements);
                     }
-                    a.update_cache();
+                    let a_cache = a.calc_cache();
                     let parent = self.get_mut(path.parent().unwrap().arena);
                     parent.children.remove(b_idx.arr);
+                    parent.children[a_idx.arr].cache = a_cache;
                     let is_lack = parent.is_lack();
                     self.purge(b_idx.arena);
-                    if is_lack {
-                        return self.handle_lack(path.parent_path());
-                    }
+                    is_lack
                 }
             }
-            None => {
-                return self.handle_lack(path.parent_path());
-            }
+            None => true,
         }
     }
 
     fn pair_neighbor(&self, parent: ArenaIndex, index: Idx) -> Option<(Idx, Idx)> {
         let parent = self.get(parent);
         if index.arr == 0 {
-            parent.children.get(1).map(|x| (index, Idx::new(*x, 1)))
+            parent
+                .children
+                .get(1)
+                .map(|x| (index, Idx::new(x.arena, 1)))
         } else {
             parent
                 .children
                 .get(index.arr - 1)
-                .map(|x| (Idx::new(*x, index.arr - 1), index))
+                .map(|x| (Idx::new(x.arena, index.arr - 1), index))
         }
     }
 
     fn recursive_update_cache(&mut self, path: PathRef) {
-        for idx in path.iter().rev() {
-            self.get_mut(idx.arena).update_cache();
+        let leaf = self.get(path.this().arena);
+        assert!(leaf.is_leaf());
+        let mut child_cache = leaf.calc_cache();
+        let mut child_index = path.this().arr;
+        for idx in path.parent_path().iter().rev() {
+            let node = self.get_mut(idx.arena);
+            node.children[child_index].cache = child_cache;
+            child_cache = node.calc_cache();
+            child_index = idx.arr;
         }
+        self.root_cache = child_cache;
     }
 
     fn purge(&mut self, index: ArenaIndex) {
@@ -501,13 +557,15 @@ impl<B: BTreeTrait> BTree<B> {
         while let Some(x) = stack.pop() {
             let node = self.get(x);
             for x in node.children.iter() {
-                stack.push(*x);
+                stack.push(x.arena);
             }
             self.nodes.remove(x);
         }
     }
 
     /// find the next sibling at the same level
+    ///
+    /// return false if there is no next sibling
     fn next_sibling(&self, path: &mut [Idx]) -> bool {
         if path.len() <= 1 {
             return false;
@@ -519,7 +577,7 @@ impl<B: BTreeTrait> BTree<B> {
         let parent = self.get(parent_idx.arena);
         match parent.children.get(this_idx.arr + 1) {
             Some(next) => {
-                path[depth - 1] = Idx::new(*next, this_idx.arr + 1);
+                path[depth - 1] = Idx::new(next.arena, this_idx.arr + 1);
             }
             None => {
                 if !self.next_sibling(&mut path[..depth - 1]) {
@@ -527,11 +585,38 @@ impl<B: BTreeTrait> BTree<B> {
                 }
 
                 let parent = self.get(path[depth - 2].arena);
-                path[depth - 1] = Idx::new(parent.children[0], 0);
+                path[depth - 1] = Idx::new(parent.children[0].arena, 0);
             }
         }
 
         true
+    }
+
+    fn get_path_from_indexes(&self, indexes: &[usize]) -> Path {
+        debug_assert_eq!(indexes[0], 0);
+        let mut path = vec![Idx::new(self.root, 0)];
+        let mut node_idx = self.root;
+        for &index in indexes[1..].iter() {
+            let node = self.get(node_idx);
+            path.push(Idx::new(node.children[index].arena, index));
+            node_idx = node.children[index].arena;
+        }
+        path
+    }
+}
+
+impl<Cache: Eq + Debug, B: BTreeTrait<Cache = Cache>> BTree<B> {
+    #[allow(unused)]
+    fn check(&self) {
+        // check cache
+        for (index, node) in self.nodes.iter() {
+            if node.is_internal() {
+                for child_info in node.children.iter() {
+                    let child = self.get(child_info.arena);
+                    assert_eq!(child.calc_cache(), child_info.cache);
+                }
+            }
+        }
     }
 }
 

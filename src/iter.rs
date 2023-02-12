@@ -1,4 +1,4 @@
-use crate::{BTree, BTreeTrait, Idx, Node, Path, QueryResult};
+use crate::{BTree, BTreeTrait, Idx, Node, Path, PathRef, QueryResult};
 
 pub(super) struct IterMut<'a, B: BTreeTrait> {
     tree: &'a mut BTree<B>,
@@ -121,7 +121,7 @@ impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
                     .tree
                     .get_mut(self.start_path[level - 1].arena);
                 for x in parent.children.drain(del_start..del_end) {
-                    deleted.push(x);
+                    deleted.push(x.arena);
                 }
             } else {
                 // parent is different
@@ -132,14 +132,14 @@ impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
                         .tree
                         .get_mut(self.start_path[level - 1].arena);
                     for x in start_parent.children.drain(del_start..) {
-                        deleted.push(x);
+                        deleted.push(x.arena);
                     }
                 }
                 {
                     // delete ..end
                     let end_parent = self.node_iter.tree.get_mut(self.end_path[level - 1].arena);
                     for x in end_parent.children.drain(..del_end) {
-                        deleted.push(x);
+                        deleted.push(x.arena);
                     }
                 }
             }
@@ -159,19 +159,31 @@ impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
             }
             level -= 1;
         }
+
         new_path.reverse(); // now in root to leaf order
-        let mut to_update_cache = Vec::with_capacity(new_path.len() * 2);
-        let mut node = self.node_iter.tree.get(self.node_iter.tree.root);
-        for &x in new_path[1..].iter() {
-            to_update_cache.push(node.children[x]);
-            if let Some(neighbor) = node.children.get(x + 1) {
-                to_update_cache.push(*neighbor);
-            }
-            node = self.node_iter.tree.get(node.children[x]);
-        }
-        while let Some(idx) = to_update_cache.pop() {
-            let node = self.node_iter.tree.get_mut(idx);
-            node.update_cache();
+        let path = self.node_iter.tree.get_path_from_indexes(&new_path);
+        seal(self.node_iter.tree, path);
+    }
+}
+
+fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: Path) {
+    let mut sibling_path = path.clone();
+    let same = !tree.next_sibling(&mut sibling_path);
+    tree.recursive_update_cache((&path).into());
+    if !same {
+        tree.recursive_update_cache((&sibling_path).into());
+    }
+
+    for i in 1..path.len() {
+        let idx = path[i];
+        let node = tree.get(idx.arena);
+        let is_lack = node.is_lack();
+        let is_full = node.is_full();
+        let path_ref: PathRef = path[0..i].into();
+        if is_lack {
+            tree.handle_lack(&path_ref);
+        } else if is_full {
+            tree.split(path_ref)
         }
     }
 }
