@@ -4,11 +4,13 @@ use std::{
 };
 
 use thunderdome::{Arena, Index as ArenaIndex};
+mod generic_impl;
 mod iter;
+pub use generic_impl::OrdTreeSet;
 
 pub trait BTreeTrait {
-    type Elem: Debug;
-    type Cache: Debug + Default;
+    type Elem: Debug + Clone;
+    type Cache: Debug + Default + Clone;
     const MAX_LEN: usize;
 
     fn element_to_cache(element: &Self::Elem) -> Self::Cache;
@@ -41,9 +43,11 @@ pub trait Query: Default {
         elem_index: usize,
         offset: usize,
         found: bool,
-    ) {
+    ) -> Option<Self::Elem> {
         if found {
-            elements.remove(elem_index);
+            Some(elements.remove(elem_index))
+        } else {
+            None
         }
     }
 
@@ -63,7 +67,7 @@ pub trait Query: Default {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BTree<B: BTreeTrait> {
     nodes: Arena<Node<B>>,
     root: ArenaIndex,
@@ -74,6 +78,24 @@ pub struct FindResult {
     pub index: usize,
     pub offset: usize,
     pub found: bool,
+}
+
+impl FindResult {
+    pub fn new_found(index: usize, offset: usize) -> Self {
+        Self {
+            index,
+            offset,
+            found: true,
+        }
+    }
+
+    pub fn new_missing(index: usize, offset: usize) -> Self {
+        Self {
+            index,
+            offset,
+            found: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,7 +149,6 @@ impl<'a> PathRef<'a> {
     }
 
     pub fn parent_path(&self) -> PathRef<'a> {
-        debug_assert!(self.len() > 1);
         Self(&self.0[..self.len() - 1])
     }
 
@@ -156,13 +177,30 @@ impl QueryResult {
 }
 
 // TODO: use enum to save spaces
-#[derive(Debug)]
 struct Node<B: BTreeTrait> {
     elements: Vec<B::Elem>,
     children: Vec<Child<B::Cache>>,
 }
 
-#[derive(Debug)]
+impl<B: BTreeTrait> Debug for Node<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Node")
+            .field("elements", &self.elements)
+            .field("children", &self.children)
+            .finish()
+    }
+}
+
+impl<B: BTreeTrait> Clone for Node<B> {
+    fn clone(&self) -> Self {
+        Self {
+            elements: self.elements.clone(),
+            children: self.children.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Child<Cache> {
     arena: ArenaIndex,
     cache: Cache,
@@ -260,6 +298,10 @@ impl<B: BTreeTrait> BTree<B> {
         Q: Query<Cache = B::Cache, Elem = B::Elem>,
     {
         let result = self.query::<Q>(tree_index);
+        self.insert_by_query_result(result, data)
+    }
+
+    pub fn insert_by_query_result(&mut self, result: QueryResult, data: B::Elem) {
         let index = *result.node_path.last().unwrap();
         let node = self.nodes.get_mut(index.arena).unwrap();
         if result.found {
@@ -275,13 +317,13 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    pub fn delete<Q>(&mut self, query: &Q::QueryArg)
+    pub fn delete<Q>(&mut self, query: &Q::QueryArg) -> bool
     where
         Q: Query<Cache = B::Cache, Elem = B::Elem>,
     {
         let result = self.query::<Q>(query);
         if !result.found {
-            return;
+            return false;
         }
 
         let index = *result.node_path.last().unwrap();
@@ -305,6 +347,7 @@ impl<B: BTreeTrait> BTree<B> {
                 path_ref.set_as_parent_path();
             }
         }
+        true
     }
 
     pub fn query<Q>(&self, query: &Q::QueryArg) -> QueryResult
@@ -376,6 +419,84 @@ impl<B: BTreeTrait> BTree<B> {
                             node.elements.len()
                         };
                         elem_iter = Some(node.elements[start..end].iter_mut());
+                    }
+                    None => return None,
+                }
+            }
+        })
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &B::Elem> + '_ {
+        let mut path = self.first_path().unwrap_or(Vec::new());
+        let idx = *path.last().unwrap();
+        let node = self.get(idx.arena);
+        let mut iter = node.elements.iter();
+        std::iter::from_fn(move || loop {
+            if path.is_empty() {
+                return None;
+            }
+
+            match iter.next() {
+                None => {
+                    if !self.next_sibling(&mut path) {
+                        return None;
+                    }
+
+                    let idx = *path.last().unwrap();
+                    let node = self.get(idx.arena);
+                    iter = node.elements.iter();
+                }
+                Some(elem) => return Some(elem),
+            }
+        })
+    }
+
+    fn first_path(&self) -> Option<Path> {
+        let mut path = Path::new();
+        let mut index = self.root;
+        let mut node = self.nodes.get(index).unwrap();
+        if node.is_empty() {
+            return None;
+        }
+
+        while node.is_internal() {
+            path.push(Idx::new(index, 0));
+            index = node.children[0].arena;
+            node = self.nodes.get(index).unwrap();
+        }
+
+        path.push(Idx::new(index, 0));
+        Some(path)
+    }
+
+    pub fn iter_range<Q>(&self, range: Range<Q::QueryArg>) -> impl Iterator<Item = &B::Elem> + '_
+    where
+        Q: Query<Cache = B::Cache, Elem = B::Elem>,
+    {
+        let start = self.query::<Q>(&range.start);
+        let end = self.query::<Q>(&range.end);
+        let mut node_iter = iter::Iter::new(self, start.clone(), end.clone());
+        let mut elem_iter: Option<std::slice::Iter<'_, B::Elem>> = None;
+        std::iter::from_fn(move || loop {
+            if let Some(inner_elem_iter) = &mut elem_iter {
+                match inner_elem_iter.next() {
+                    Some(elem) => return Some(elem),
+                    None => elem_iter = None,
+                }
+            } else {
+                match node_iter.next() {
+                    Some((idx, node)) => {
+                        let start = if idx.arena == start.node_path.last().unwrap().arena {
+                            start.elem_index
+                        } else {
+                            0
+                        };
+                        let end = if idx.arena == end.node_path.last().unwrap().arena {
+                            end.elem_index
+                        } else {
+                            node.elements.len()
+                        };
+                        elem_iter = Some(node.elements[start..end].iter());
                     }
                     None => return None,
                 }
@@ -617,6 +738,9 @@ impl<Cache: Eq + Debug, B: BTreeTrait<Cache = Cache>> BTree<B> {
                 }
             }
         }
+
+        // TODO: check leaf at same level
+        // TODO: check custom invariants
     }
 }
 

@@ -7,6 +7,13 @@ pub(super) struct IterMut<'a, B: BTreeTrait> {
     done: bool,
 }
 
+pub(super) struct Iter<'a, B: BTreeTrait> {
+    tree: &'a BTree<B>,
+    inclusive_end: QueryResult,
+    path: Path,
+    done: bool,
+}
+
 impl<'a, B: BTreeTrait> IterMut<'a, B> {
     pub fn new(tree: &'a mut BTree<B>, start: QueryResult, inclusive_end: QueryResult) -> Self {
         Self {
@@ -185,5 +192,38 @@ fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: Path) {
         } else if is_full {
             tree.split(path_ref)
         }
+    }
+}
+
+impl<'a, B: BTreeTrait> Iter<'a, B> {
+    pub fn new(tree: &'a BTree<B>, start: QueryResult, inclusive_end: QueryResult) -> Self {
+        Self {
+            tree,
+            inclusive_end,
+            path: start.node_path,
+            done: false,
+        }
+    }
+}
+
+impl<'a, B: BTreeTrait> Iterator for Iter<'a, B> {
+    type Item = (Idx, &'a Node<B>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.done {
+            return None;
+        }
+
+        if self.inclusive_end.node_path.last() == self.path.last() {
+            self.done = true;
+        }
+
+        let last = *self.path.last().unwrap();
+        if !self.tree.next_sibling(&mut self.path) {
+            self.done = true;
+        }
+
+        let node = self.tree.get(last.arena);
+        Some((last, unsafe { std::mem::transmute(node) }))
     }
 }

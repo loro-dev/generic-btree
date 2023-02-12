@@ -1,10 +1,48 @@
 use std::fmt::Debug;
 
-use crate::{BTreeTrait, Query};
+use crate::{BTree, BTreeTrait, FindResult, Query};
 
 #[derive(Debug)]
-pub struct OrdTrait<T> {
+struct OrdTrait<T> {
     _phantom: std::marker::PhantomData<T>,
+}
+
+#[derive(Debug)]
+pub struct OrdTreeSet<T: Clone + Ord + Debug + 'static>(BTree<OrdTrait<T>>);
+
+impl<T: Clone + Ord + Debug + 'static> OrdTreeSet<T> {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self(BTree::new())
+    }
+
+    #[inline(always)]
+    pub fn insert(&mut self, value: T) {
+        let result = self.0.query::<OrdTrait<T>>(&value);
+        if !result.found {
+            self.0.insert_by_query_result(result, value);
+        }
+    }
+
+    #[inline(always)]
+    pub fn delete(&mut self, value: &T) -> bool {
+        self.0.delete::<OrdTrait<T>>(value)
+    }
+
+    #[inline(always)]
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.0.iter()
+    }
+
+    pub(crate) fn check(&self) {
+        self.0.check()
+    }
+}
+
+impl<T: Clone + Ord + Debug + 'static> Default for OrdTreeSet<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<T> Default for OrdTrait<T> {
@@ -20,21 +58,21 @@ impl<T: Clone + Ord + Debug + 'static> BTreeTrait for OrdTrait<T> {
 
     type Cache = Option<(T, T)>;
 
-    const MAX_LEN: usize = 4;
+    const MAX_LEN: usize = 32;
 
     fn element_to_cache(_: &Self::Elem) -> Self::Cache {
         None
     }
 
-    fn update_cache_internal<'a, Iter>(cache: &mut Self::Cache, iter: Iter)
-    where
-        Self::Cache: 'a,
-        Iter: Iterator<Item = &'a Self::Cache>,
-    {
+    fn calc_cache_internal(caches: &[crate::Child<Self::Cache>]) -> Self::Cache {
+        Some((
+            caches[0].cache.as_ref().unwrap().0.clone(),
+            caches[1].cache.as_ref().unwrap().1.clone(),
+        ))
     }
 
-    fn update_cache_leaf<'a, Iter>(cache: &mut Self::Cache, elements: &[Self::Elem]) {
-        todo!()
+    fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache {
+        Some((elements[0].clone(), elements[elements.len() - 1].clone()))
     }
 }
 
@@ -43,73 +81,48 @@ impl<T: Ord + Clone + Debug + 'static> Query for OrdTrait<T> {
     type Elem = T;
     type QueryArg = T;
 
-    fn find_node<'a, 'b, Iter>(
+    fn find_node(
         &mut self,
-        target: &'b Self::QueryArg,
-        iter: Iter,
-    ) -> crate::FindResult
-    where
-        Iter: Iterator<Item = &'a Self::Cache>,
-        Self::Cache: 'a,
-    {
-        let mut last = 0;
-        for (i, elem) in iter.enumerate() {
-            last = i;
-            if let Some((start, end)) = elem {
-                if start <= target && end >= target {
-                    return crate::FindResult {
-                        index: i,
-                        offset: 0,
-                        found: true,
-                    };
-                } else if start > target {
-                    return crate::FindResult {
-                        index: i,
-                        offset: 0,
-                        found: false,
-                    };
-                }
+        target: &Self::QueryArg,
+        child_caches: &[crate::Child<Self::Cache>],
+    ) -> crate::FindResult {
+        for (i, child) in child_caches.iter().enumerate() {
+            let (min, max) = child.cache.as_ref().unwrap();
+            if target < min {
+                return FindResult::new_missing(i, 0);
+            }
+            if target >= min && target <= max {
+                return FindResult::new_found(i, 0);
             }
         }
 
-        crate::FindResult {
-            index: last + 1,
-            offset: 0,
-            found: false,
-        }
+        FindResult::new_missing(child_caches.len(), 0)
     }
 
-    fn find_element<'a, 'b, Iter>(
-        &mut self,
-        target: &'b Self::QueryArg,
-        iter: Iter,
-    ) -> crate::FindResult
-    where
-        Iter: Iterator<Item = &'a Self::Elem>,
-        Self::Elem: 'a,
-    {
-        let mut last = 0;
-        for (i, elem) in iter.enumerate() {
-            last = i;
-            if elem == target {
-                return crate::FindResult {
-                    index: i,
-                    offset: 0,
-                    found: true,
-                };
-            } else if elem > target {
-                return crate::FindResult {
-                    index: i,
-                    offset: 0,
-                    found: false,
-                };
-            }
+    fn find_element(&mut self, target: &T, elements: &[T]) -> crate::FindResult {
+        match elements.binary_search(target) {
+            Ok(i) => FindResult::new_found(i, 0),
+            Err(i) => FindResult::new_missing(i, 0),
         }
+    }
+}
 
-        crate::FindResult {
-            index: last + 1,
-            offset: 0,
-            found: false,
+#[cfg(test)]
+mod test {
+    use rand::{Rng, SeedableRng};
+
+    use super::*;
+
+    #[test]
+    fn test() {
+        let mut tree: OrdTreeSet<u64> = OrdTreeSet::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+        let mut data: Vec<u64> = (0..100).map(|_| rng.gen()).collect();
+        for &value in data.iter() {
+            tree.insert(value);
+            tree.check();
         }
+        data.sort_unstable();
+        assert_eq!(tree.iter().copied().collect::<Vec<_>>(), data);
     }
 }
