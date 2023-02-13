@@ -71,6 +71,12 @@ impl<Key: Clone + Ord + Debug + 'static> OrdTreeSet<Key> {
     }
 }
 
+impl<Key: Clone + Ord + Debug + 'static> Default for OrdTreeSet<Key> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> Default for OrdTreeMap<Key, Value> {
     fn default() -> Self {
         Self::new()

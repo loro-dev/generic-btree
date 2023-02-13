@@ -19,7 +19,7 @@ fuzz_target!(|data: Vec<Action>| {
                 let pos = pos as usize % (truth.len() + 1);
                 let s = content.to_string();
                 truth.insert_str(pos, &s);
-                rope.insert(pos, s);
+                rope.insert(pos, &s);
             }
             Action::Delete { pos, len } => {
                 let pos = pos as usize % (truth.len() + 1);

@@ -1,6 +1,8 @@
 use std::ops::RangeBounds;
 
-use crate::{BTree, BTreeTrait, FindResult, Query};
+use smallvec::SmallVec;
+
+use crate::{BTree, BTreeTrait, FindResult, Query, SmallElemVec};
 
 struct Finder {
     left: usize,
@@ -25,9 +27,10 @@ impl Rope {
         self.len() == 0
     }
 
-    pub fn insert(&mut self, index: usize, elem: String) {
+    pub fn insert(&mut self, index: usize, elem: &str) {
         let result = self.tree.query::<Finder>(&index);
-        self.tree.insert_by_query_result(result, elem);
+        self.tree
+            .batch_insert_by_query_result(result, &elem.chars().collect::<SmallVec<[char; 16]>>());
     }
 
     pub fn delete_range(&mut self, range: impl RangeBounds<usize>) {
@@ -44,11 +47,11 @@ impl Rope {
         self.tree.drain::<Finder>(start..end);
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &String> {
+    pub fn iter(&self) -> impl Iterator<Item = &char> {
         self.tree.iter()
     }
 
-    pub fn iter_range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &String> {
+    pub fn iter_range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &char> {
         self.tree.iter_range::<Finder>(range)
     }
 
@@ -66,8 +69,8 @@ impl Default for Rope {
 impl ToString for Rope {
     fn to_string(&self) -> String {
         let mut ans = String::with_capacity(self.len());
-        for s in self.iter() {
-            ans.push_str(s);
+        for &s in self.iter() {
+            ans.push(s);
         }
 
         ans
@@ -75,14 +78,14 @@ impl ToString for Rope {
 }
 
 impl BTreeTrait for RopeTrait {
-    type Elem = String;
+    type Elem = char;
 
     type Cache = usize;
 
-    const MAX_LEN: usize = 32;
+    const MAX_LEN: usize = 16;
 
     fn element_to_cache(element: &Self::Elem) -> Self::Cache {
-        element.len()
+        1
     }
 
     fn calc_cache_internal(caches: &[crate::Child<Self::Cache>]) -> Self::Cache {
@@ -90,25 +93,18 @@ impl BTreeTrait for RopeTrait {
     }
 
     fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache {
-        elements.iter().map(|x| x.len()).sum()
+        elements.len()
     }
 
     fn insert(elements: &mut Vec<Self::Elem>, index: usize, offset: usize, elem: Self::Elem) {
-        if index < elements.len() {
-            if elements[index].capacity() > elements[index].len() + elem.len() {
-                elements[index].insert_str(offset, &elem);
-            } else if offset == 0 {
-                elements.insert(index, elem);
-            } else if offset == elements[index].len() {
-                elements.insert(index + 1, elem);
-            } else {
-                let right = elements[index][offset..].to_owned();
-                elements[index].drain(offset..);
-                elements.splice(index + 1..index + 1, [elem, right]);
-            }
-        } else {
-            elements.push(elem);
-        }
+        elements.insert(index, elem);
+    }
+
+    fn insert_batch(elements: &mut Vec<Self::Elem>, index: usize, _: usize, elem: &[Self::Elem])
+    where
+        Self::Elem: Clone,
+    {
+        elements.splice(index..index, elem.iter().cloned());
     }
 }
 
@@ -131,16 +127,13 @@ impl Query<RopeTrait> for Finder {
         FindResult::new_missing(child_caches.len(), self.left)
     }
 
-    fn find_element(&mut self, _: &Self::QueryArg, elements: &[String]) -> crate::FindResult {
-        for (i, elem) in elements.iter().enumerate() {
-            if self.left >= elem.len() {
-                self.left -= elem.len();
-            } else {
-                return FindResult::new_found(i, self.left);
-            }
+    fn find_element(&mut self, _: &Self::QueryArg, elements: &[char]) -> crate::FindResult {
+        if self.left >= elements.len() {
+            self.left -= elements.len();
+            return FindResult::new_missing(elements.len(), self.left);
         }
 
-        FindResult::new_missing(elements.len(), self.left)
+        FindResult::new_found(self.left, 0)
     }
 
     fn init(target: &Self::QueryArg) -> Self {
@@ -148,86 +141,79 @@ impl Query<RopeTrait> for Finder {
     }
 
     fn delete(
-        elements: &mut Vec<String>,
+        elements: &mut Vec<char>,
         _: &Self::QueryArg,
         elem_index: usize,
         offset: usize,
-    ) -> Option<String> {
+    ) -> Option<char> {
         if elem_index >= elements.len() {
             return None;
         }
 
-        let text = &mut elements[elem_index];
-        if offset >= text.len() {
-            return None;
+        if elem_index < elements.len() {
+            Some(elements.remove(elem_index))
+        } else {
+            None
         }
-
-        if offset == 0 && text.len() == 1 {
-            return Some(elements.remove(elem_index));
-        }
-
-        Some(text.remove(offset).to_string())
     }
 
-    fn delete_range<'x, 'b>(
-        elements: &'x mut Vec<String>,
-        _: &'b Self::QueryArg,
-        _: &'b Self::QueryArg,
+    fn delete_range(
+        elements: &mut Vec<char>,
+        _: &Self::QueryArg,
+        _: &Self::QueryArg,
         start: Option<crate::QueryResult>,
         end: Option<crate::QueryResult>,
-    ) -> Box<dyn Iterator<Item = String> + 'x> {
-        fn drain_start(start: crate::QueryResult, elements: &mut [String]) -> usize {
+    ) -> SmallElemVec<char> {
+        fn drain_start(start: crate::QueryResult, elements: &mut [char]) -> usize {
             if start.offset == 0 || start.elem_index >= elements.len() {
                 start.elem_index
-            } else if start.offset == elements[start.elem_index].len() {
+            } else if start.offset == 1 {
                 start.elem_index + 1
             } else {
-                elements[start.elem_index].drain(start.offset..);
-                start.elem_index + 1
+                unreachable!()
             }
         }
 
-        fn drain_end(end: crate::QueryResult, elements: &mut [String]) -> usize {
-            if end.elem_index >= elements.len() {
+        fn drain_end(end: crate::QueryResult, elements: &mut [char]) -> usize {
+            if end.offset == 0 || end.elem_index >= elements.len() {
                 end.elem_index
-            } else if elements[end.elem_index].len() == end.offset {
+            } else if 1 == end.offset {
                 end.elem_index + 1
-            } else if end.offset == 0 {
-                end.elem_index
             } else {
-                elements[end.elem_index].drain(..end.offset);
-                end.elem_index
+                unreachable!()
             }
         }
 
         if elements.is_empty() {
-            return Box::new(None.into_iter());
+            return SmallElemVec::new();
         }
 
         match (start, end) {
-            (None, None) => Box::new(elements.drain(..)),
+            (None, None) => elements.drain(..).collect(),
             (None, Some(end)) => {
                 let end = drain_end(end, elements);
-                Box::new(elements.drain(..end))
+                elements.drain(..end).collect()
             }
             (Some(start), None) => {
                 let start = drain_start(start, elements);
-                Box::new(elements.drain(start..))
+                elements.drain(start..).collect()
             }
             (Some(start), Some(end)) => {
                 if start.elem_index == end.elem_index {
-                    if elements.len() <= start.elem_index {
-                        Box::new(None.into_iter())
+                    if elements.len() <= start.elem_index || start.offset == end.offset {
+                        SmallElemVec::new()
                     } else {
-                        let ans: String = elements[start.elem_index]
-                            .drain(start.offset..end.offset)
-                            .collect();
-                        Box::new(Some(ans).into_iter())
+                        assert_eq!(start.offset, 0);
+                        assert_eq!(end.offset, 1);
+                        let mut ans = SmallElemVec::new();
+                        ans.push(elements[start.elem_index]);
+                        elements.remove(start.elem_index);
+                        ans
                     }
                 } else {
                     let start = drain_start(start, elements);
                     let end = drain_end(end, elements);
-                    Box::new(elements.drain(start..end))
+                    elements.drain(start..end).collect()
                 }
             }
         }
@@ -241,8 +227,8 @@ mod test {
     #[test]
     fn test() {
         let mut rope = Rope::new();
-        rope.insert(0, "123".to_string());
-        rope.insert(1, "x".to_string());
+        rope.insert(0, "123");
+        rope.insert(1, "x");
         assert_eq!(rope.len(), 4);
         rope.delete_range(2..4);
         assert_eq!(&rope.to_string(), "1x");
@@ -268,7 +254,7 @@ mod test {
                     let pos = pos as usize % (truth.len() + 1);
                     let s = content.to_string();
                     truth.insert_str(pos, &s);
-                    rope.insert(pos, s);
+                    rope.insert(pos, &s);
                 }
                 Action::Delete { pos, len } => {
                     let pos = pos as usize % (truth.len() + 1);

@@ -35,6 +35,7 @@ dependencies = [
 name = "generic-btree"
 version = "0.1.0"
 dependencies = [
+ "smallvec",
  "thunderdome",
 ]
 
@@ -96,6 +97,12 @@ checksum = "8856d8364d252a14d474036ea1358d63c9e6965c8e5c1885c18f73d70bff9c7b"
 dependencies = [
  "proc-macro2",
 ]
+
+[[package]]
+name = "smallvec"
+version = "1.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a507befe795404456341dfab10cef66ead4c041f62b8b11bbb92bffe5d0953e0"
 
 [[package]]
 name = "syn"

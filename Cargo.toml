@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+smallvec = "1.10.0"
 thunderdome = "0.6.0"
 
 
@@ -23,3 +24,6 @@ harness = false
 [[bench]]
 name = "rope"
 harness = false
+
+[profile.release]
+debug = true

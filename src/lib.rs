@@ -3,11 +3,13 @@ use std::{
     ops::{Deref, Range},
 };
 
+use smallvec::SmallVec;
 use thunderdome::{Arena, Index as ArenaIndex};
 mod generic_impl;
 mod iter;
 pub use generic_impl::*;
 pub mod rle;
+type SmallElemVec<T> = SmallVec<[T; 8]>;
 
 pub trait BTreeTrait {
     type Elem: Debug;
@@ -18,6 +20,18 @@ pub trait BTreeTrait {
     #[allow(unused)]
     fn insert(elements: &mut Vec<Self::Elem>, index: usize, offset: usize, elem: Self::Elem) {
         elements.insert(index, elem);
+    }
+
+    #[allow(unused)]
+    fn insert_batch(
+        elements: &mut Vec<Self::Elem>,
+        index: usize,
+        offset: usize,
+        elem: &[Self::Elem],
+    ) where
+        Self::Elem: Clone,
+    {
+        unimplemented!()
     }
 
     fn calc_cache_internal(caches: &[Child<Self::Cache>]) -> Self::Cache;
@@ -58,13 +72,13 @@ pub trait Query<B: BTreeTrait> {
         end_query: &'b Self::QueryArg,
         start: Option<QueryResult>,
         end: Option<QueryResult>,
-    ) -> Box<dyn Iterator<Item = B::Elem> + 'x> {
-        Box::new(match (start, end) {
-            (None, None) => elements.drain(..),
-            (None, Some(to)) => elements.drain(..to.elem_index),
-            (Some(from), None) => elements.drain(from.elem_index..),
-            (Some(from), Some(to)) => elements.drain(from.elem_index..to.elem_index),
-        })
+    ) -> SmallElemVec<B::Elem> {
+        match (start, end) {
+            (None, None) => elements.drain(..).collect(),
+            (None, Some(to)) => elements.drain(..to.elem_index).collect(),
+            (Some(from), None) => elements.drain(from.elem_index..).collect(),
+            (Some(from), Some(to)) => elements.drain(from.elem_index..to.elem_index).collect(),
+        }
     }
 }
 
@@ -122,7 +136,7 @@ impl Idx {
     }
 }
 
-type Path = Vec<Idx>;
+type Path = SmallVec<[Idx; 8]>;
 
 struct PathRef<'a>(&'a [Idx]);
 
@@ -328,6 +342,26 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
+    pub fn batch_insert_by_query_result(&mut self, result: QueryResult, data: &[B::Elem])
+    where
+        B::Elem: Clone,
+    {
+        let index = *result.node_path.last().unwrap();
+        let node = self.nodes.get_mut(index.arena).unwrap();
+        if result.found {
+            B::insert_batch(&mut node.elements, result.elem_index, result.offset, data);
+        } else {
+            node.elements
+                .splice(result.elem_index..result.elem_index, data.iter().cloned());
+        }
+
+        let is_full = node.is_full();
+        self.recursive_update_cache(result.path_ref());
+        if is_full {
+            self.split(result.path_ref());
+        }
+    }
+
     pub fn delete<Q>(&mut self, query: &Q::QueryArg) -> bool
     where
         Q: Query<B>,
@@ -365,7 +399,7 @@ impl<B: BTreeTrait> BTree<B> {
         let mut node = self.nodes.get(self.root).unwrap();
         let mut index = self.root;
         let mut ans = QueryResult {
-            node_path: vec![Idx::new(index, 0)],
+            node_path: smallvec::smallvec![Idx::new(index, 0)],
             elem_index: 0,
             offset: 0,
             found: false,
@@ -434,7 +468,7 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &B::Elem> + '_ {
-        let mut path = self.first_path().unwrap_or(Vec::new());
+        let mut path = self.first_path().unwrap_or(SmallVec::new());
         let idx = path.last().copied().unwrap_or(Idx::new(self.root, 0));
         let node = self.get(idx.arena);
         let mut iter = node.elements.iter();
@@ -724,7 +758,7 @@ impl<B: BTreeTrait> BTree<B> {
 
     fn try_get_path_from_indexes(&self, indexes: &[usize]) -> Option<Path> {
         debug_assert_eq!(indexes[0], 0);
-        let mut path = vec![Idx::new(self.root, 0)];
+        let mut path = smallvec::smallvec![Idx::new(self.root, 0)];
         let mut node_idx = self.root;
         for &index in indexes[1..].iter() {
             let node = self.get(node_idx);

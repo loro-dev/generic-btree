@@ -108,7 +108,9 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
                 start,
                 end,
             );
-            self.reversed_elements = iter.collect();
+            for x in iter {
+                self.reversed_elements.push(x);
+            }
             self.reversed_elements.reverse();
             // TODO: provide offset & use Q's drain method
         }
@@ -230,9 +232,9 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
 fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: Path) {
     let mut sibling_path = path.clone();
     let same = !tree.next_sibling(&mut sibling_path);
-    tree.recursive_update_cache((&path).into());
+    tree.recursive_update_cache(path.as_ref().into());
     if !same {
-        tree.recursive_update_cache((&sibling_path).into());
+        tree.recursive_update_cache(sibling_path.as_ref().into());
     }
 
     for i in 1..path.len() {

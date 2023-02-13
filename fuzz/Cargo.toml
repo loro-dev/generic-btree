@@ -19,7 +19,7 @@ path = ".."
 members = ["."]
 
 [profile.release]
-debug = 1
+debug = true
 
 [[bin]]
 name = "ord"
