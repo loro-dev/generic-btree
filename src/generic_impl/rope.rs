@@ -1,4 +1,4 @@
-use std::{fmt::Display, ops::RangeBounds};
+use std::ops::RangeBounds;
 
 use crate::{BTree, BTreeTrait, FindResult, Query};
 
@@ -79,7 +79,7 @@ impl BTreeTrait for RopeTrait {
 
     type Cache = usize;
 
-    const MAX_LEN: usize = 16;
+    const MAX_LEN: usize = 32;
 
     fn element_to_cache(element: &Self::Elem) -> Self::Cache {
         element.len()

@@ -1,8 +1,8 @@
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
 use arbitrary::Arbitrary;
 use generic_btree::Rope;
+use libfuzzer_sys::fuzz_target;
 
 #[derive(Arbitrary, Debug)]
 enum Action {
