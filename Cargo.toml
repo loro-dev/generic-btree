@@ -1,12 +1,21 @@
 [package]
 name = "generic-btree"
+author = "Zixuan Chen"
 version = "0.1.0"
 edition = "2021"
+description = "Generic BTree for versatile purposes"
+readme = "README.md"
+homepage = "https://github.com/loro-dev/generic-btree"
+repository = "https://github.com/loro-dev/generic-btree"
+authors = ["zxch3n <remch183@outlook.com>"]
+keywords = ["btree", "data-structure"]
+include = ["Cargo.toml", "./src/**/*.rs"]
+documentation = "https://docs.rs/generic-btree"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-smallvec = "1.10.0"
+smallvec = { version = "1.10.0", features = [] }
 thunderdome = "0.6.0"
 
 

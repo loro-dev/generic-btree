@@ -66,10 +66,10 @@ pub trait Query<B: BTreeTrait> {
     }
 
     #[allow(unused)]
-    fn delete_range<'x, 'b>(
-        elements: &'x mut Vec<B::Elem>,
-        start_query: &'b Self::QueryArg,
-        end_query: &'b Self::QueryArg,
+    fn delete_range(
+        elements: &mut Vec<B::Elem>,
+        start_query: &Self::QueryArg,
+        end_query: &Self::QueryArg,
         start: Option<QueryResult>,
         end: Option<QueryResult>,
     ) -> SmallElemVec<B::Elem> {
