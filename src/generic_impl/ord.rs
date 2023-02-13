@@ -111,15 +111,15 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
     }
 }
 
-impl<Key: Ord + Clone + Debug + 'static, Value> Query for OrdTrait<Key, Value> {
-    type Cache = Option<(Key, Key)>;
-    type Elem = (Key, Value);
+impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug> Query<OrdTrait<Key, Value>>
+    for OrdTrait<Key, Value>
+{
     type QueryArg = Key;
 
     fn find_node(
         &mut self,
         target: &Self::QueryArg,
-        child_caches: &[crate::Child<Self::Cache>],
+        child_caches: &[crate::Child<Option<(Key, Key)>>],
     ) -> crate::FindResult {
         for (i, child) in child_caches.iter().enumerate() {
             let (min, max) = child.cache.as_ref().unwrap();
@@ -134,7 +134,7 @@ impl<Key: Ord + Clone + Debug + 'static, Value> Query for OrdTrait<Key, Value> {
         FindResult::new_missing(child_caches.len(), 0)
     }
 
-    fn find_element(&mut self, target: &Key, elements: &[Self::Elem]) -> crate::FindResult {
+    fn find_element(&mut self, target: &Key, elements: &[(Key, Value)]) -> crate::FindResult {
         match elements.binary_search_by_key(&target, |x| &x.0) {
             Ok(i) => FindResult::new_found(i, 0),
             Err(i) => FindResult::new_missing(i, 0),

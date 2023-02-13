@@ -22,13 +22,28 @@ pub trait BTreeTrait {
 
     fn calc_cache_internal(caches: &[Child<Self::Cache>]) -> Self::Cache;
     fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache;
+}
+
+pub trait Query<B: BTreeTrait> {
+    type QueryArg: Debug + Clone;
+
+    fn init(target: &Self::QueryArg) -> Self;
+
+    fn find_node(
+        &mut self,
+        target: &Self::QueryArg,
+        child_caches: &[Child<B::Cache>],
+    ) -> FindResult;
+
+    fn find_element(&mut self, target: &Self::QueryArg, elements: &[B::Elem]) -> FindResult;
 
     #[allow(unused)]
     fn delete(
-        elements: &mut Vec<Self::Elem>,
+        elements: &mut Vec<B::Elem>,
+        query: &Self::QueryArg,
         elem_index: usize,
         offset: usize,
-    ) -> Option<Self::Elem> {
+    ) -> Option<B::Elem> {
         if elem_index >= elements.len() {
             return None;
         }
@@ -38,33 +53,19 @@ pub trait BTreeTrait {
 
     #[allow(unused)]
     fn delete_range<'x, 'b>(
-        elements: &'x mut Vec<Self::Elem>,
-        from: Option<QueryResult>,
-        to: Option<QueryResult>,
-    ) -> Box<dyn Iterator<Item = Self::Elem> + 'x> {
-        Box::new(match (from, to) {
+        elements: &'x mut Vec<B::Elem>,
+        start_query: &'b Self::QueryArg,
+        end_query: &'b Self::QueryArg,
+        start: Option<QueryResult>,
+        end: Option<QueryResult>,
+    ) -> Box<dyn Iterator<Item = B::Elem> + 'x> {
+        Box::new(match (start, end) {
             (None, None) => elements.drain(..),
             (None, Some(to)) => elements.drain(..to.elem_index),
             (Some(from), None) => elements.drain(from.elem_index..),
             (Some(from), Some(to)) => elements.drain(from.elem_index..to.elem_index),
         })
     }
-}
-
-pub trait Query {
-    type Cache;
-    type Elem;
-    type QueryArg: Debug + Clone;
-
-    fn init(target: &Self::QueryArg) -> Self;
-
-    fn find_node(
-        &mut self,
-        target: &Self::QueryArg,
-        child_caches: &[Child<Self::Cache>],
-    ) -> FindResult;
-
-    fn find_element(&mut self, target: &Self::QueryArg, elements: &[Self::Elem]) -> FindResult;
 }
 
 #[derive(Debug)]
@@ -305,7 +306,7 @@ impl<B: BTreeTrait> BTree<B> {
 
     pub fn insert<Q>(&mut self, tree_index: &Q::QueryArg, data: B::Elem)
     where
-        Q: Query<Cache = B::Cache, Elem = B::Elem>,
+        Q: Query<B>,
     {
         let result = self.query::<Q>(tree_index);
         self.insert_by_query_result(result, data)
@@ -329,7 +330,7 @@ impl<B: BTreeTrait> BTree<B> {
 
     pub fn delete<Q>(&mut self, query: &Q::QueryArg) -> bool
     where
-        Q: Query<Cache = B::Cache, Elem = B::Elem>,
+        Q: Query<B>,
     {
         let result = self.query::<Q>(query);
         if !result.found {
@@ -358,7 +359,7 @@ impl<B: BTreeTrait> BTree<B> {
 
     pub fn query<Q>(&self, query: &Q::QueryArg) -> QueryResult
     where
-        Q: Query<Cache = B::Cache, Elem = B::Elem>,
+        Q: Query<B>,
     {
         let mut finder = Q::init(query);
         let mut node = self.nodes.get(self.root).unwrap();
@@ -385,13 +386,13 @@ impl<B: BTreeTrait> BTree<B> {
         ans
     }
 
-    pub fn drain<Q>(&mut self, range: Range<Q::QueryArg>) -> iter::Drain<B>
+    pub fn drain<Q>(&mut self, range: Range<Q::QueryArg>) -> iter::Drain<B, Q>
     where
-        Q: Query<Cache = B::Cache, Elem = B::Elem>,
+        Q: Query<B>,
     {
         let from = self.query::<Q>(&range.start);
         let to = self.query::<Q>(&range.end);
-        iter::Drain::new(self, from, to)
+        iter::Drain::new(self, range.start, range.end, from, to)
     }
 
     pub fn iter_mut<Q>(
@@ -399,7 +400,7 @@ impl<B: BTreeTrait> BTree<B> {
         range: Range<Q::QueryArg>,
     ) -> impl Iterator<Item = &mut B::Elem> + '_
     where
-        Q: Query<Cache = B::Cache, Elem = B::Elem>,
+        Q: Query<B>,
     {
         let start = self.query::<Q>(&range.start);
         let end = self.query::<Q>(&range.end);
@@ -477,7 +478,7 @@ impl<B: BTreeTrait> BTree<B> {
 
     pub fn iter_range<Q>(&self, range: Range<Q::QueryArg>) -> impl Iterator<Item = &B::Elem> + '_
     where
-        Q: Query<Cache = B::Cache, Elem = B::Elem>,
+        Q: Query<B>,
     {
         let start = self.query::<Q>(&range.start);
         let end = self.query::<Q>(&range.end);

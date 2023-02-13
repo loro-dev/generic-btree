@@ -5,6 +5,8 @@ Goals:
 - Rle
 - Rope
 - Range Map
+  - delete given id
+  - delete a span
 
 ### TODO
 
