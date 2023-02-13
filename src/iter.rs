@@ -101,8 +101,36 @@ impl<'a, B: BTreeTrait> Iterator for Drain<'a, B> {
     }
 }
 
+impl<'a, B: BTreeTrait> Drain<'a, B> {
+    fn ensure_trim_start_and_end(&mut self) {
+        if self.node_iter.done {
+            return;
+        }
+
+        let Some((idx, node)) = self.node_iter.next() else { return };
+        let is_first = idx.arena == self.start_path.last().unwrap().arena;
+        let is_last = idx.arena == self.end_path.last().unwrap().arena;
+        let start = if is_first { self.start_elem_index } else { 0 };
+        let end = if is_last {
+            self.end_elem_index
+        } else {
+            node.elements.len()
+        };
+
+        node.elements.drain(start..end);
+        if !is_last {
+            let last = self
+                .node_iter
+                .tree
+                .get_mut(self.end_path.last().unwrap().arena);
+            last.elements.drain(..self.end_elem_index);
+        }
+    }
+}
+
 impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
     fn drop(&mut self) {
+        self.ensure_trim_start_and_end();
         // leaf nodes can be removed only when their elements are empty
         let mut level = self.start_path.len() - 1;
         let mut deleted = Vec::new();

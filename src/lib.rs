@@ -7,6 +7,7 @@ use thunderdome::{Arena, Index as ArenaIndex};
 mod generic_impl;
 mod iter;
 pub use generic_impl::{OrdTreeMap, OrdTreeSet};
+pub mod rle;
 
 pub trait BTreeTrait {
     type Elem: Debug;
@@ -21,40 +22,23 @@ pub trait BTreeTrait {
 
     fn calc_cache_internal(caches: &[Child<Self::Cache>]) -> Self::Cache;
     fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache;
-}
-
-pub trait Query: Default {
-    type Cache;
-    type Elem;
-    type QueryArg: Debug + Clone;
-
-    fn find_node(
-        &mut self,
-        target: &Self::QueryArg,
-        child_caches: &[Child<Self::Cache>],
-    ) -> FindResult;
-
-    fn find_element(&mut self, target: &Self::QueryArg, elements: &[Self::Elem]) -> FindResult;
 
     #[allow(unused)]
     fn delete(
         elements: &mut Vec<Self::Elem>,
-        query: &Self::QueryArg,
         elem_index: usize,
         offset: usize,
-        found: bool,
     ) -> Option<Self::Elem> {
-        if found {
-            Some(elements.remove(elem_index))
-        } else {
-            None
+        if elem_index >= elements.len() {
+            return None;
         }
+
+        Some(elements.remove(elem_index))
     }
 
     #[allow(unused)]
     fn delete_range<'x, 'b>(
         elements: &'x mut Vec<Self::Elem>,
-        query: &'b Self::QueryArg,
         from: Option<QueryResult>,
         to: Option<QueryResult>,
     ) -> Box<dyn Iterator<Item = Self::Elem> + 'x> {
@@ -65,6 +49,22 @@ pub trait Query: Default {
             (Some(from), Some(to)) => elements.drain(from.elem_index..to.elem_index),
         })
     }
+}
+
+pub trait Query {
+    type Cache;
+    type Elem;
+    type QueryArg: Debug + Clone;
+
+    fn init(target: &Self::QueryArg) -> Self;
+
+    fn find_node(
+        &mut self,
+        target: &Self::QueryArg,
+        child_caches: &[Child<Self::Cache>],
+    ) -> FindResult;
+
+    fn find_element(&mut self, target: &Self::QueryArg, elements: &[Self::Elem]) -> FindResult;
 }
 
 #[derive(Debug)]
@@ -338,13 +338,9 @@ impl<B: BTreeTrait> BTree<B> {
 
         let index = *result.node_path.last().unwrap();
         let node = self.nodes.get_mut(index.arena).unwrap();
-        Q::delete(
-            &mut node.elements,
-            query,
-            result.elem_index,
-            result.offset,
-            result.found,
-        );
+        if result.found {
+            Q::delete(&mut node.elements, query, result.elem_index, result.offset);
+        }
 
         let is_full = node.is_full();
         let is_lack = node.is_lack();
@@ -364,7 +360,7 @@ impl<B: BTreeTrait> BTree<B> {
     where
         Q: Query<Cache = B::Cache, Elem = B::Elem>,
     {
-        let mut finder = Q::default();
+        let mut finder = Q::init(query);
         let mut node = self.nodes.get(self.root).unwrap();
         let mut index = self.root;
         let mut ans = QueryResult {

@@ -140,6 +140,10 @@ impl<Key: Ord + Clone + Debug + 'static, Value> Query for OrdTrait<Key, Value> {
             Err(i) => FindResult::new_missing(i, 0),
         }
     }
+
+    fn init(target: &Self::QueryArg) -> Self {
+        Self::default()
+    }
 }
 
 #[cfg(test)]
