@@ -6,10 +6,10 @@ use std::{
 use thunderdome::{Arena, Index as ArenaIndex};
 mod generic_impl;
 mod iter;
-pub use generic_impl::OrdTreeSet;
+pub use generic_impl::{OrdTreeMap, OrdTreeSet};
 
 pub trait BTreeTrait {
-    type Elem: Debug + Clone;
+    type Elem: Debug;
     type Cache: Debug + Default + Clone + Eq;
     const MAX_LEN: usize;
 
@@ -67,11 +67,21 @@ pub trait Query: Default {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BTree<B: BTreeTrait> {
     nodes: Arena<Node<B>>,
     root: ArenaIndex,
     root_cache: B::Cache,
+}
+
+impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
+    fn clone(&self) -> Self {
+        Self {
+            nodes: self.nodes.clone(),
+            root: self.root,
+            root_cache: self.root_cache.clone(),
+        }
+    }
 }
 
 pub struct FindResult {
@@ -191,7 +201,7 @@ impl<B: BTreeTrait> Debug for Node<B> {
     }
 }
 
-impl<B: BTreeTrait> Clone for Node<B> {
+impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for Node<B> {
     fn clone(&self) -> Self {
         Self {
             elements: self.elements.clone(),

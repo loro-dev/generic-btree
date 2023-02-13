@@ -1,2 +1,2 @@
 mod ord;
-pub use ord::OrdTreeSet;
+pub use ord::{OrdTreeMap, OrdTreeSet};

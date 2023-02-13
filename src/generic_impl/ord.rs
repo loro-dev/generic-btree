@@ -3,35 +3,45 @@ use std::fmt::Debug;
 use crate::{BTree, BTreeTrait, FindResult, Query};
 
 #[derive(Debug)]
-struct OrdTrait<T> {
-    _phantom: std::marker::PhantomData<T>,
+struct OrdTrait<Key, Value> {
+    _phantom: std::marker::PhantomData<(Key, Value)>,
 }
 
 #[derive(Debug)]
-pub struct OrdTreeSet<T: Clone + Ord + Debug + 'static>(BTree<OrdTrait<T>>);
+pub struct OrdTreeMap<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug>(
+    BTree<OrdTrait<Key, Value>>,
+);
 
-impl<T: Clone + Ord + Debug + 'static> OrdTreeSet<T> {
+#[derive(Debug)]
+pub struct OrdTreeSet<Key: Clone + Ord + Debug + 'static>(OrdTreeMap<Key, ()>);
+
+impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> OrdTreeMap<Key, Value> {
     #[inline(always)]
     pub fn new() -> Self {
         Self(BTree::new())
     }
 
     #[inline(always)]
-    pub fn insert(&mut self, value: T) {
-        let result = self.0.query::<OrdTrait<T>>(&value);
+    pub fn insert(&mut self, key: Key, value: Value) {
+        let result = self.0.query::<OrdTrait<Key, Value>>(&key);
         if !result.found {
-            self.0.insert_by_query_result(result, value);
+            self.0.insert_by_query_result(result, (key, value));
         }
     }
 
     #[inline(always)]
-    pub fn delete(&mut self, value: &T) -> bool {
-        self.0.delete::<OrdTrait<T>>(value)
+    pub fn delete(&mut self, value: &Key) -> bool {
+        self.0.delete::<OrdTrait<Key, Value>>(value)
     }
 
     #[inline(always)]
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
+    pub fn iter(&self) -> impl Iterator<Item = &(Key, Value)> {
         self.0.iter()
+    }
+
+    #[inline(always)]
+    pub fn iter_key(&self) -> impl Iterator<Item = &Key> {
+        self.0.iter().map(|x| &x.0)
     }
 
     pub(crate) fn check(&self) {
@@ -39,13 +49,35 @@ impl<T: Clone + Ord + Debug + 'static> OrdTreeSet<T> {
     }
 }
 
-impl<T: Clone + Ord + Debug + 'static> Default for OrdTreeSet<T> {
+impl<Key: Clone + Ord + Debug + 'static> OrdTreeSet<Key> {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self(OrdTreeMap::new())
+    }
+
+    #[inline(always)]
+    pub fn insert(&mut self, key: Key) {
+        self.0.insert(key, ());
+    }
+
+    #[inline(always)]
+    pub fn delete(&mut self, key: &Key) -> bool {
+        self.0.delete(key)
+    }
+
+    #[inline(always)]
+    pub fn iter(&self) -> impl Iterator<Item = &Key> {
+        self.0.iter_key()
+    }
+}
+
+impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> Default for OrdTreeMap<Key, Value> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> Default for OrdTrait<T> {
+impl<Key, Value> Default for OrdTrait<Key, Value> {
     fn default() -> Self {
         Self {
             _phantom: Default::default(),
@@ -53,10 +85,10 @@ impl<T> Default for OrdTrait<T> {
     }
 }
 
-impl<T: Clone + Ord + Debug + 'static> BTreeTrait for OrdTrait<T> {
-    type Elem = T;
+impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for OrdTrait<Key, Value> {
+    type Elem = (Key, Value);
 
-    type Cache = Option<(T, T)>;
+    type Cache = Option<(Key, Key)>;
 
     const MAX_LEN: usize = 16;
 
@@ -72,14 +104,17 @@ impl<T: Clone + Ord + Debug + 'static> BTreeTrait for OrdTrait<T> {
     }
 
     fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache {
-        Some((elements[0].clone(), elements[elements.len() - 1].clone()))
+        Some((
+            elements[0].0.clone(),
+            elements[elements.len() - 1].0.clone(),
+        ))
     }
 }
 
-impl<T: Ord + Clone + Debug + 'static> Query for OrdTrait<T> {
-    type Cache = Option<(T, T)>;
-    type Elem = T;
-    type QueryArg = T;
+impl<Key: Ord + Clone + Debug + 'static, Value> Query for OrdTrait<Key, Value> {
+    type Cache = Option<(Key, Key)>;
+    type Elem = (Key, Value);
+    type QueryArg = Key;
 
     fn find_node(
         &mut self,
@@ -99,8 +134,8 @@ impl<T: Ord + Clone + Debug + 'static> Query for OrdTrait<T> {
         FindResult::new_missing(child_caches.len(), 0)
     }
 
-    fn find_element(&mut self, target: &T, elements: &[T]) -> crate::FindResult {
-        match elements.binary_search(target) {
+    fn find_element(&mut self, target: &Key, elements: &[Self::Elem]) -> crate::FindResult {
+        match elements.binary_search_by_key(&target, |x| &x.0) {
             Ok(i) => FindResult::new_found(i, 0),
             Err(i) => FindResult::new_missing(i, 0),
         }

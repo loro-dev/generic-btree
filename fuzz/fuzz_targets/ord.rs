@@ -22,7 +22,7 @@ fuzz_target!(|actions: Vec<Action>| {
                 tree.insert(value);
             }
             Action::Delete => {
-                let value = tree_a.iter().nth(30).copied();
+                let value = tree_a.iter().nth(3).copied();
                 if let Some(value) = value {
                     tree_a.remove(&value);
                     tree.delete(&value);
