@@ -1,0 +1,28 @@
+[package]
+name = "generic-btree-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1.2.3", features = ["derive"] }
+libfuzzer-sys = "0.4"
+
+[dependencies.generic-btree]
+path = ".."
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "ord"
+path = "fuzz_targets/ord.rs"
+test = false
+doc = false

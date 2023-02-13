@@ -428,7 +428,7 @@ impl<B: BTreeTrait> BTree<B> {
 
     pub fn iter(&self) -> impl Iterator<Item = &B::Elem> + '_ {
         let mut path = self.first_path().unwrap_or(Vec::new());
-        let idx = *path.last().unwrap();
+        let idx = path.last().copied().unwrap_or(Idx::new(self.root, 0));
         let node = self.get(idx.arena);
         let mut iter = node.elements.iter();
         std::iter::from_fn(move || loop {
