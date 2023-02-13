@@ -174,7 +174,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             let del_end = if end_node.is_empty() {
                 end_path[level].arr + 1
             } else {
-                start_path[level].arr
+                end_path[level].arr
             };
             new_path.push(del_start.max(1) - 1);
             if start_path[level - 1].arena == end_path[level - 1].arena {
@@ -220,8 +220,10 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         }
 
         new_path.reverse(); // now in root to leaf order
-        let path = self.node_iter.tree.get_path_from_indexes(&new_path);
-        seal(self.node_iter.tree, path);
+        if let Some(path) = self.node_iter.tree.try_get_path_from_indexes(&new_path) {
+            // otherwise the path is invalid (e.g. the tree is empty)
+            seal(self.node_iter.tree, path);
+        }
     }
 }
 

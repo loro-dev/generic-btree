@@ -6,7 +6,7 @@ use std::{
 use thunderdome::{Arena, Index as ArenaIndex};
 mod generic_impl;
 mod iter;
-pub use generic_impl::{OrdTreeMap, OrdTreeSet};
+pub use generic_impl::*;
 pub mod rle;
 
 pub trait BTreeTrait {
@@ -722,16 +722,16 @@ impl<B: BTreeTrait> BTree<B> {
         true
     }
 
-    fn get_path_from_indexes(&self, indexes: &[usize]) -> Path {
+    fn try_get_path_from_indexes(&self, indexes: &[usize]) -> Option<Path> {
         debug_assert_eq!(indexes[0], 0);
         let mut path = vec![Idx::new(self.root, 0)];
         let mut node_idx = self.root;
         for &index in indexes[1..].iter() {
             let node = self.get(node_idx);
-            path.push(Idx::new(node.children[index].arena, index));
+            path.push(Idx::new(node.children.get(index)?.arena, index));
             node_idx = node.children[index].arena;
         }
-        path
+        Some(path)
     }
 }
 

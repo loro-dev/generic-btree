@@ -52,8 +52,14 @@ impl Rope {
         self.tree.iter_range::<Finder>(range)
     }
 
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self { tree: BTree::new() }
+    }
+}
+
+impl Default for Rope {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -194,6 +200,10 @@ impl Query<RopeTrait> for Finder {
             }
         }
 
+        if elements.is_empty() {
+            return Box::new(None.into_iter());
+        }
+
         match (start, end) {
             (None, None) => Box::new(elements.drain(..)),
             (None, Some(end)) => {
@@ -206,10 +216,14 @@ impl Query<RopeTrait> for Finder {
             }
             (Some(start), Some(end)) => {
                 if start.elem_index == end.elem_index {
-                    let ans: String = elements[start.elem_index]
-                        .drain(start.offset..end.offset)
-                        .collect();
-                    Box::new(Some(ans).into_iter())
+                    if elements.len() <= start.elem_index {
+                        Box::new(None.into_iter())
+                    } else {
+                        let ans: String = elements[start.elem_index]
+                            .drain(start.offset..end.offset)
+                            .collect();
+                        Box::new(Some(ans).into_iter())
+                    }
                 } else {
                     let start = drain_start(start, elements);
                     let end = drain_end(end, elements);
@@ -237,5 +251,109 @@ mod test {
         rope.delete_range(..);
         assert_eq!(&rope.to_string(), "");
         assert_eq!(rope.len(), 0);
+    }
+
+    #[derive(Debug)]
+    enum Action {
+        Insert { pos: u8, content: u8 },
+        Delete { pos: u8, len: u8 },
+    }
+
+    fn fuzz(data: Vec<Action>) {
+        let mut rope = Rope::new();
+        let mut truth = String::new();
+        for action in data {
+            match action {
+                Action::Insert { pos, content } => {
+                    let pos = pos as usize % (truth.len() + 1);
+                    let s = content.to_string();
+                    truth.insert_str(pos, &s);
+                    rope.insert(pos, s);
+                }
+                Action::Delete { pos, len } => {
+                    let pos = pos as usize % (truth.len() + 1);
+                    let mut len = len as usize % 10;
+                    len = len.min(truth.len() - pos);
+
+                    rope.delete_range(pos..(pos + len));
+                    truth.drain(pos..pos + len);
+                }
+            }
+        }
+
+        assert_eq!(rope.to_string(), truth);
+    }
+
+    use Action::*;
+
+    #[test]
+    fn fuzz_0() {
+        fuzz(vec![
+            Insert {
+                pos: 0,
+                content: 128,
+            },
+            Insert {
+                pos: 0,
+                content: 249,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Delete { pos: 192, len: 193 },
+            Insert {
+                pos: 106,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 100,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert { pos: 0, content: 8 },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 111,
+                content: 127,
+            },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 36 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 135, len: 169 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+        ])
+    }
+
+    #[test]
+    fn fuzz_1() {
+        fuzz(vec![])
     }
 }

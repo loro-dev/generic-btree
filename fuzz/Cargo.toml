@@ -26,3 +26,9 @@ name = "ord"
 path = "fuzz_targets/ord.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "rope"
+path = "fuzz_targets/rope.rs"
+test = false
+doc = false
