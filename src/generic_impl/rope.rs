@@ -58,6 +58,14 @@ impl Rope {
     pub fn new() -> Self {
         Self { tree: BTree::new() }
     }
+
+    pub fn node_len(&self) -> usize {
+        self.tree.node_len()
+    }
+
+    pub fn check(&self) {
+        self.tree.check()
+    }
 }
 
 impl Default for Rope {
@@ -260,16 +268,22 @@ mod test {
                     let pos = pos as usize % (truth.len() + 1);
                     let mut len = len as usize % 10;
                     len = len.min(truth.len() - pos);
-
+                    // dbg!(&rope);
+                    // dbg!(rope.to_string(), pos, len);
                     rope.delete_range(pos..(pos + len));
+                    // dbg!(rope.to_string());
+                    // dbg!(&rope);
                     truth.drain(pos..pos + len);
                 }
             }
+
+            rope.check();
         }
 
         assert_eq!(rope.to_string(), truth);
     }
 
+    use ctor::ctor;
     use Action::*;
 
     #[test]
@@ -340,6 +354,98 @@ mod test {
 
     #[test]
     fn fuzz_1() {
+        fuzz(vec![
+            Insert {
+                pos: 157,
+                content: 108,
+            },
+            Insert {
+                pos: 255,
+                content: 255,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 8,
+                content: 101,
+            },
+            Insert {
+                pos: 111,
+                content: 127,
+            },
+            Delete { pos: 255, len: 169 },
+        ])
+    }
+
+    #[test]
+    fn fuzz_2() {
+        fuzz(vec![
+            Insert {
+                pos: 0,
+                content: 128,
+            },
+            Insert {
+                pos: 0,
+                content: 249,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 0,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 249,
+            },
+            Insert {
+                pos: 135,
+                content: 255,
+            },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 169, len: 169 },
+        ])
+    }
+
+    #[test]
+    fn fuzz_empty() {
         fuzz(vec![])
+    }
+
+    #[ctor]
+    fn init_color_backtrace() {
+        color_backtrace::install();
     }
 }

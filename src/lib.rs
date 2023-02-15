@@ -327,6 +327,10 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
+    pub fn node_len(&self) -> usize {
+        self.nodes.len()
+    }
+
     pub fn insert<Q>(&mut self, tree_index: &Q::QueryArg, data: B::Elem)
     where
         Q: Query<B>,
@@ -635,7 +639,8 @@ impl<B: BTreeTrait> BTree<B> {
 
     /// merge into or borrow from neighbor
     ///
-    /// cache should be up-to-date when calling this
+    /// - cache should be up-to-date when calling this.
+    /// - this method will keep the arena path valid, while arr index path may change
     ///
     /// return is parent lack
     fn handle_lack(&mut self, path: &PathRef) -> bool {
@@ -676,19 +681,36 @@ impl<B: BTreeTrait> BTree<B> {
                     parent.children[b_idx.arr].cache = b_cache;
                     parent.is_lack()
                 } else {
-                    // merge b to a
-                    if a.is_internal() {
-                        a.children.append(&mut b.children);
+                    // merge
+                    if path.this() == a_idx {
+                        // merge b to a, delete b
+                        if a.is_internal() {
+                            a.children.append(&mut b.children);
+                        } else {
+                            a.elements.append(&mut b.elements);
+                        }
+                        let a_cache = a.calc_cache();
+                        let parent = self.get_mut(path.parent().unwrap().arena);
+                        parent.children[a_idx.arr].cache = a_cache;
+                        parent.children.remove(b_idx.arr);
+                        let is_lack = parent.is_lack();
+                        self.purge(b_idx.arena);
+                        is_lack
                     } else {
-                        a.elements.append(&mut b.elements);
+                        // merge a to b, delete a
+                        if a.is_internal() {
+                            b.children.splice(0..0, std::mem::take(&mut a.children));
+                        } else {
+                            b.elements.splice(0..0, std::mem::take(&mut a.elements));
+                        }
+                        let b_cache = b.calc_cache();
+                        let parent = self.get_mut(path.parent().unwrap().arena);
+                        parent.children[b_idx.arr].cache = b_cache;
+                        parent.children.remove(a_idx.arr);
+                        let is_lack = parent.is_lack();
+                        self.purge(a_idx.arena);
+                        is_lack
                     }
-                    let a_cache = a.calc_cache();
-                    let parent = self.get_mut(path.parent().unwrap().arena);
-                    parent.children.remove(b_idx.arr);
-                    parent.children[a_idx.arr].cache = a_cache;
-                    let is_lack = parent.is_lack();
-                    self.purge(b_idx.arena);
-                    is_lack
                 }
             }
             None => true,
@@ -705,8 +727,19 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn pair_neighbor(&self, parent: ArenaIndex, this_pos: Idx) -> Option<(Idx, Idx)> {
+    fn pair_neighbor(&self, parent: ArenaIndex, mut this_pos: Idx) -> Option<(Idx, Idx)> {
         let parent = self.get(parent);
+        if this_pos.arr >= parent.children.len()
+            || parent.children[this_pos.arr].arena != this_pos.arena
+        {
+            // need to search correct this_pos.arr
+            let Some(x) = parent
+                .children
+                .iter()
+                .position(|x| x.arena == this_pos.arena) else { return None };
+            this_pos.arr = x;
+        }
+
         if this_pos.arr == 0 {
             parent
                 .children
@@ -798,11 +831,16 @@ impl<B: BTreeTrait> BTree<B> {
                     assert_eq!(child.calc_cache(), child_info.cache);
                 }
             }
+
+            if index != self.root {
+                assert!(!node.is_lack(), "len={}", node.len());
+            }
+
+            assert!(!node.is_full(), "len={}", node.len());
         }
 
         // TODO: check leaf at same level
         // TODO: check custom invariants
-        // TODO: check children num bound
     }
 }
 

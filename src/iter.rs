@@ -243,12 +243,30 @@ fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: Path) {
         let idx = path[i];
         let node = tree.get(idx.arena);
         let is_lack = node.is_lack();
-        let is_full = node.is_full();
-        let path_ref: PathRef = path[0..i].into();
+        let path_ref: PathRef = path[0..=i].into();
         if is_lack {
             tree.handle_lack(&path_ref);
-        } else if is_full {
-            tree.split(path_ref)
+        }
+    }
+
+    for i in 1..path.len() {
+        if sibling_path[i] == path[i] {
+            continue;
+        }
+        let idx = sibling_path[i];
+        let node = match tree.nodes.get(idx.arena) {
+            Some(node) => node,
+            None => {
+                // it must be merged into path
+                // println!("{} {:?} is merged into path", i, idx.arena); //DEBUG
+                sibling_path[i] = path[i];
+                continue;
+            }
+        };
+        let is_lack = node.is_lack();
+        let path_ref: PathRef = sibling_path[0..=i].into();
+        if is_lack {
+            tree.handle_lack(&path_ref);
         }
     }
 
