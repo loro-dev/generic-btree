@@ -1,3 +1,5 @@
+use smallvec::SmallVec;
+
 use crate::{BTree, BTreeTrait, Idx, Node, Path, PathRef, Query, QueryResult};
 
 pub(super) struct IterMut<'a, B: BTreeTrait> {
@@ -163,8 +165,8 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         let start_path = &self.start_result.node_path;
         let end_path = &self.end_result.node_path;
         let mut level = start_path.len() - 1;
-        let mut deleted = Vec::new();
-        let mut new_path = Vec::with_capacity(start_path.len());
+        let mut deleted: SmallVec<[_; 32]> = SmallVec::new();
+        let mut new_path: SmallVec<[_; 16]> = SmallVec::with_capacity(start_path.len());
         while start_path[level].arena != end_path[level].arena {
             let start_node = self.node_iter.tree.get(start_path[level].arena);
             let end_node = self.node_iter.tree.get(end_path[level].arena);
@@ -249,6 +251,8 @@ fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: Path) {
             tree.split(path_ref)
         }
     }
+
+    tree.try_shrink_levels();
 }
 
 impl<'a, B: BTreeTrait> Iter<'a, B> {

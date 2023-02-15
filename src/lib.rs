@@ -9,7 +9,7 @@ mod generic_impl;
 mod iter;
 pub use generic_impl::*;
 pub mod rle;
-type SmallElemVec<T> = SmallVec<[T; 8]>;
+pub type SmallElemVec<T> = SmallVec<[T; 8]>;
 
 pub trait BTreeTrait {
     type Elem: Debug;
@@ -199,6 +199,15 @@ impl QueryResult {
     fn path_ref(&self) -> PathRef {
         self.node_path.as_slice().into()
     }
+
+    pub fn elem<'b, Elem: Debug, B: BTreeTrait<Elem = Elem>>(
+        &self,
+        tree: &'b BTree<B>,
+    ) -> Option<&'b Elem> {
+        tree.nodes
+            .get(self.path_ref().this().arena)
+            .map(|x| &x.elements[self.elem_index])
+    }
 }
 
 // TODO: use enum to save spaces
@@ -228,7 +237,7 @@ impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for Node<B> {
 #[derive(Debug, Clone)]
 pub struct Child<Cache> {
     arena: ArenaIndex,
-    cache: Cache,
+    pub cache: Cache,
 }
 
 impl<Cache> Child<Cache> {
@@ -387,6 +396,8 @@ impl<B: BTreeTrait> BTree<B> {
             while self.handle_lack(&path_ref) {
                 path_ref.set_as_parent_path();
             }
+
+            self.try_shrink_levels()
         }
         true
     }
@@ -429,10 +440,8 @@ impl<B: BTreeTrait> BTree<B> {
         iter::Drain::new(self, range.start, range.end, from, to)
     }
 
-    pub fn iter_mut<Q>(
-        &mut self,
-        range: Range<Q::QueryArg>,
-    ) -> impl Iterator<Item = &mut B::Elem> + '_
+    #[allow(unused)]
+    fn iter_mut<Q>(&mut self, range: Range<Q::QueryArg>) -> impl Iterator<Item = &mut B::Elem> + '_
     where
         Q: Query<B>,
     {
@@ -631,7 +640,6 @@ impl<B: BTreeTrait> BTree<B> {
     /// return is parent lack
     fn handle_lack(&mut self, path: &PathRef) -> bool {
         if path.is_root() {
-            // ignore the lack of nodes problem for root
             return false;
         }
 
@@ -687,18 +695,28 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn pair_neighbor(&self, parent: ArenaIndex, index: Idx) -> Option<(Idx, Idx)> {
+    fn try_shrink_levels(&mut self) {
+        while self.get(self.root).children.len() == 1 {
+            let root = self.get(self.root);
+            let child_arena = root.children[0].arena;
+            let child = self.nodes.remove(child_arena).unwrap();
+            let root = self.get_mut(self.root);
+            let _ = std::mem::replace(root, child);
+        }
+    }
+
+    fn pair_neighbor(&self, parent: ArenaIndex, this_pos: Idx) -> Option<(Idx, Idx)> {
         let parent = self.get(parent);
-        if index.arr == 0 {
+        if this_pos.arr == 0 {
             parent
                 .children
                 .get(1)
-                .map(|x| (index, Idx::new(x.arena, 1)))
+                .map(|x| (this_pos, Idx::new(x.arena, 1)))
         } else {
             parent
                 .children
-                .get(index.arr - 1)
-                .map(|x| (Idx::new(x.arena, index.arr - 1), index))
+                .get(this_pos.arr - 1)
+                .map(|x| (Idx::new(x.arena, this_pos.arr - 1), this_pos))
         }
     }
 
@@ -717,7 +735,7 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     fn purge(&mut self, index: ArenaIndex) {
-        let mut stack = vec![index];
+        let mut stack: SmallVec<[_; 64]> = smallvec::smallvec![index];
         while let Some(x) = stack.pop() {
             let node = self.get(x);
             for x in node.children.iter() {
