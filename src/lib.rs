@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::HashMap,
     fmt::Debug,
     ops::{Deref, Range},
 };
@@ -421,7 +420,15 @@ impl<B: BTreeTrait> BTree<B> {
         true
     }
 
+    #[inline(always)]
     pub fn query<Q>(&self, query: &Q::QueryArg) -> QueryResult
+    where
+        Q: Query<B>,
+    {
+        self.query_with_finder_return::<Q>(query).0
+    }
+
+    pub fn query_with_finder_return<Q>(&self, query: &Q::QueryArg) -> (QueryResult, Q)
     where
         Q: Query<B>,
     {
@@ -447,7 +454,13 @@ impl<B: BTreeTrait> BTree<B> {
         ans.elem_index = result.index;
         ans.found = result.found;
         ans.offset = result.offset;
-        ans
+        (ans, finder)
+    }
+
+    pub fn get_elem(&self, q: QueryResult) -> &B::Elem {
+        let index = *q.node_path.last().unwrap();
+        let node = self.nodes.get(index.arena).unwrap();
+        &node.elements[q.elem_index]
     }
 
     pub fn drain<Q>(&mut self, range: Range<Q::QueryArg>) -> iter::Drain<B, Q>
