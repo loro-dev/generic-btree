@@ -2,13 +2,6 @@ use smallvec::SmallVec;
 
 use crate::{BTree, BTreeTrait, Idx, Node, Path, PathRef, Query, QueryResult};
 
-pub(super) struct IterMut<'a, B: BTreeTrait> {
-    tree: &'a mut BTree<B>,
-    inclusive_end: QueryResult,
-    path: Path,
-    done: bool,
-}
-
 pub(super) struct Iter<'a, B: BTreeTrait> {
     tree: &'a BTree<B>,
     inclusive_end: QueryResult,
@@ -16,41 +9,10 @@ pub(super) struct Iter<'a, B: BTreeTrait> {
     done: bool,
 }
 
-impl<'a, B: BTreeTrait> IterMut<'a, B> {
-    pub fn new(tree: &'a mut BTree<B>, start: QueryResult, inclusive_end: QueryResult) -> Self {
-        Self {
-            tree,
-            inclusive_end,
-            path: start.node_path,
-            done: false,
-        }
-    }
-}
-
-impl<'a, B: BTreeTrait> Iterator for IterMut<'a, B> {
-    type Item = (Idx, &'a mut Node<B>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-
-        if self.inclusive_end.node_path.last() == self.path.last() {
-            self.done = true;
-        }
-
-        let last = *self.path.last().unwrap();
-        if !self.tree.next_sibling(&mut self.path) {
-            self.done = true;
-        }
-
-        let node = self.tree.get_mut(last.arena);
-        Some((last, unsafe { std::mem::transmute(node) }))
-    }
-}
-
 pub struct Drain<'a, B: BTreeTrait, Q: Query<B>> {
-    node_iter: IterMut<'a, B>,
+    tree: &'a mut BTree<B>,
+    current_path: Path,
+    done: bool,
     start_query: Q::QueryArg,
     start_result: QueryResult,
     end_query: Q::QueryArg,
@@ -68,9 +30,11 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
         end_result: QueryResult,
     ) -> Self {
         Self {
+            tree,
+            done: false,
             start_query,
             end_query,
-            node_iter: IterMut::new(tree, start_result.clone(), end_result.clone()),
+            current_path: start_result.node_path.clone(),
             start_result,
             end_result,
             reversed_elements: Vec::with_capacity(B::MAX_LEN),
@@ -82,7 +46,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
     type Item = B::Elem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.node_iter.done {
+        if self.done {
             return None;
         }
 
@@ -91,7 +55,16 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
                 return Some(next_elem);
             }
 
-            let Some((idx, node)) = self.node_iter.next() else { return None };
+            if self.end_result.node_path.last() == self.current_path.last() {
+                self.done = true;
+            }
+
+            let idx = *self.current_path.last().unwrap();
+            if !self.tree.next_sibling(&mut self.current_path) {
+                self.done = true;
+            }
+
+            let node = self.tree.get_mut(idx.arena);
             let start = if idx.arena == self.start_result.node_path.last().unwrap().arena {
                 Some(self.start_result.clone())
             } else {
@@ -121,7 +94,12 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
 
 impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
     fn ensure_trim_start_and_end(&mut self) {
-        let Some((idx, node)) = self.node_iter.next() else { return };
+        if self.done {
+            return;
+        }
+
+        let idx = *self.current_path.last().unwrap();
+        let node = self.tree.get_mut(idx.arena);
         let start = if idx.arena == self.start_result.node_path.last().unwrap().arena {
             Some(self.start_result.clone())
         } else {
@@ -144,7 +122,6 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
 
         if !is_last {
             let last = self
-                .node_iter
                 .tree
                 .get_mut(self.end_result.node_path.last().unwrap().arena);
             for _ in Q::delete_range(
@@ -168,8 +145,8 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         let mut deleted: SmallVec<[_; 32]> = SmallVec::new();
         let mut new_path: SmallVec<[_; 16]> = SmallVec::with_capacity(start_path.len());
         while start_path[level].arena != end_path[level].arena {
-            let start_node = self.node_iter.tree.get(start_path[level].arena);
-            let end_node = self.node_iter.tree.get(end_path[level].arena);
+            let start_node = self.tree.get(start_path[level].arena);
+            let end_node = self.tree.get(end_path[level].arena);
             let del_start = if start_node.is_empty() {
                 start_path[level].arr
             } else {
@@ -183,7 +160,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             new_path.push(del_start.max(1) - 1);
             if start_path[level - 1].arena == end_path[level - 1].arena {
                 // parent is the same, delete start..end
-                let parent = self.node_iter.tree.get_mut(start_path[level - 1].arena);
+                let parent = self.tree.get_mut(start_path[level - 1].arena);
                 for x in parent.children.drain(del_start..del_end) {
                     deleted.push(x.arena);
                 }
@@ -191,14 +168,14 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
                 // parent is different
                 {
                     // delete start..
-                    let start_parent = self.node_iter.tree.get_mut(start_path[level - 1].arena);
+                    let start_parent = self.tree.get_mut(start_path[level - 1].arena);
                     for x in start_parent.children.drain(del_start..) {
                         deleted.push(x.arena);
                     }
                 }
                 {
                     // delete ..end
-                    let end_parent = self.node_iter.tree.get_mut(end_path[level - 1].arena);
+                    let end_parent = self.tree.get_mut(end_path[level - 1].arena);
                     for x in end_parent.children.drain(..del_end) {
                         deleted.push(x.arena);
                     }
@@ -211,7 +188,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
 
         // release memory
         for x in deleted {
-            self.node_iter.tree.purge(x);
+            self.tree.purge(x);
         }
 
         // update cache
@@ -224,9 +201,9 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         }
 
         new_path.reverse(); // now in root to leaf order
-        if let Some(path) = self.node_iter.tree.try_get_path_from_indexes(&new_path) {
+        if let Some(path) = self.tree.try_get_path_from_indexes(&new_path) {
             // otherwise the path is invalid (e.g. the tree is empty)
-            seal(self.node_iter.tree, path);
+            seal(self.tree, path);
         }
     }
 }
@@ -302,6 +279,6 @@ impl<'a, B: BTreeTrait> Iterator for Iter<'a, B> {
         }
 
         let node = self.tree.get(last.arena);
-        Some((last, unsafe { std::mem::transmute(node) }))
+        Some((last, node))
     }
 }

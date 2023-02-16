@@ -1,8 +1,12 @@
+#![forbid(unsafe_code)]
+
 use std::{
+    collections::HashMap,
     fmt::Debug,
     ops::{Deref, Range},
 };
 
+use fxhash::FxHashMap;
 use smallvec::SmallVec;
 use thunderdome::{Arena, Index as ArenaIndex};
 mod generic_impl;
@@ -193,6 +197,17 @@ pub struct QueryResult {
     pub elem_index: usize,
     pub offset: usize,
     pub found: bool,
+}
+
+/// A slice of elements in a leaf node of BTree.
+///
+/// - `start` is Some(start_offset) when the slice is the first slice of the given range
+/// - `end` is Some(end_offset) when the slice is the last slice of the given range
+#[derive(Debug)]
+pub struct ElemSlice<'a, Elem> {
+    pub elements: &'a mut [Elem],
+    pub start: Option<usize>,
+    pub end: Option<usize>,
 }
 
 impl QueryResult {
@@ -444,40 +459,93 @@ impl<B: BTreeTrait> BTree<B> {
         iter::Drain::new(self, range.start, range.end, from, to)
     }
 
-    #[allow(unused)]
-    fn iter_mut<Q>(&mut self, range: Range<Q::QueryArg>) -> impl Iterator<Item = &mut B::Elem> + '_
+    /// Update the elements in place
+    ///
+    /// F should returns true if the cache need to be updated
+    ///
+    /// TODO: need better test coverage
+    pub fn update<Q, F>(&mut self, range: Range<Q::QueryArg>, f: &mut F)
     where
         Q: Query<B>,
+        F: FnMut(ElemSlice<'_, B::Elem>) -> bool,
     {
         let start = self.query::<Q>(&range.start);
         let end = self.query::<Q>(&range.end);
-        let mut node_iter = iter::IterMut::new(self, start.clone(), end.clone());
-        let mut elem_iter: Option<std::slice::IterMut<'_, B::Elem>> = None;
-        std::iter::from_fn(move || loop {
-            if let Some(inner_elem_iter) = &mut elem_iter {
-                match inner_elem_iter.next() {
-                    Some(elem) => return Some(elem),
-                    None => elem_iter = None,
-                }
+        let start_leaf = start.node_path.last().unwrap();
+        let mut path = start.node_path.clone();
+        let end_leaf = end.node_path.last().unwrap();
+
+        let mut dirty_map: FxHashMap<(isize, ArenaIndex), Vec<Idx>> = FxHashMap::default();
+
+        loop {
+            let current_leaf = path.last().unwrap();
+            let idx = *path.last().unwrap();
+            let node = self.get_mut(idx.arena);
+            let start_index = if current_leaf == start_leaf {
+                start.elem_index
             } else {
-                match node_iter.next() {
-                    Some((idx, node)) => {
-                        let start = if idx.arena == start.node_path.last().unwrap().arena {
-                            start.elem_index
-                        } else {
-                            0
-                        };
-                        let end = if idx.arena == end.node_path.last().unwrap().arena {
-                            end.elem_index
-                        } else {
-                            node.elements.len()
-                        };
-                        elem_iter = Some(node.elements[start..end].iter_mut());
+                0
+            };
+            let end_index = if current_leaf == end_leaf {
+                end.elem_index
+            } else {
+                node.elements.len()
+            };
+            let should_update_cache = f(ElemSlice {
+                elements: &mut node.elements[start_index..end_index],
+                start: if current_leaf == start_leaf {
+                    Some(start.offset)
+                } else {
+                    None
+                },
+                end: if current_leaf == end_leaf {
+                    Some(end.offset)
+                } else {
+                    None
+                },
+            });
+
+            if should_update_cache {
+                // TODO: TEST THIS
+                let mut current = path.last().unwrap();
+                let mut parent_level = path.len() as isize - 2;
+                while parent_level >= 0 {
+                    let parent = path.get(parent_level as usize).unwrap();
+                    if let Some(arr) = dirty_map.get_mut(&(parent_level, parent.arena)) {
+                        arr.push(*current);
+                        // parent is already created by others, so all ancestors must also be created
+                        break;
+                    } else {
+                        dirty_map.insert((parent_level, parent.arena), vec![*current]);
+                        current = parent;
+                        parent_level -= 1;
                     }
-                    None => return None,
                 }
             }
-        })
+
+            if current_leaf == end_leaf {
+                break;
+            }
+
+            if !self.next_sibling(&mut path) {
+                break;
+            }
+        }
+
+        if !dirty_map.is_empty() {
+            let mut dirty_set: Vec<((isize, ArenaIndex), Vec<Idx>)> =
+                dirty_map.into_iter().collect();
+            dirty_set.sort_unstable_by_key(|x| -x.0 .0);
+            for ((_, parent), children) in dirty_set {
+                for Idx { arena, arr } in children {
+                    let (child, parent) = self.nodes.get2_mut(arena, parent);
+                    let (child, parent) = (child.unwrap(), parent.unwrap());
+                    parent.children[arr].cache = child.calc_cache();
+                }
+            }
+
+            self.root_cache = self.nodes.get(self.root).unwrap().calc_cache();
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &B::Elem> + '_ {

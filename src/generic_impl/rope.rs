@@ -63,6 +63,17 @@ impl Rope {
         self.tree.node_len()
     }
 
+    fn update_in_place(&mut self, pos: usize, new: &str) {
+        let mut iter = new.chars();
+        self.tree
+            .update::<Finder, _>(pos..pos + new.len(), &mut |slice| {
+                for c in slice.elements.iter_mut() {
+                    *c = iter.next().unwrap();
+                }
+                false
+            });
+    }
+
     pub fn check(&self) {
         self.tree.check()
     }
@@ -90,9 +101,9 @@ impl BTreeTrait for RopeTrait {
 
     type Cache = usize;
 
-    const MAX_LEN: usize = 16;
+    const MAX_LEN: usize = 128;
 
-    fn element_to_cache(element: &Self::Elem) -> Self::Cache {
+    fn element_to_cache(_: &Self::Elem) -> Self::Cache {
         1
     }
 
@@ -104,7 +115,7 @@ impl BTreeTrait for RopeTrait {
         elements.len()
     }
 
-    fn insert(elements: &mut Vec<Self::Elem>, index: usize, offset: usize, elem: Self::Elem) {
+    fn insert(elements: &mut Vec<Self::Elem>, index: usize, _: usize, elem: Self::Elem) {
         elements.insert(index, elem);
     }
 
@@ -152,7 +163,7 @@ impl Query<RopeTrait> for Finder {
         elements: &mut Vec<char>,
         _: &Self::QueryArg,
         elem_index: usize,
-        offset: usize,
+        _: usize,
     ) -> Option<char> {
         if elem_index >= elements.len() {
             return None;
@@ -245,6 +256,15 @@ mod test {
         rope.delete_range(..);
         assert_eq!(&rope.to_string(), "");
         assert_eq!(rope.len(), 0);
+    }
+
+    #[test]
+    fn test_update() {
+        let mut rope = Rope::new();
+        rope.insert(0, "123");
+        rope.insert(3, "xyz");
+        rope.update_in_place(1, "kkkk");
+        assert_eq!(&rope.to_string(), "1kkkkz");
     }
 
     #[derive(Debug)]
