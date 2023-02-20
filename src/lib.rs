@@ -956,6 +956,10 @@ impl<B: BTreeTrait> BTree<B> {
         }
         Some(path)
     }
+
+    pub fn root_cache(&self) -> &B::Cache {
+        &self.root_cache
+    }
 }
 
 impl<B: BTreeTrait> BTree<B> {
