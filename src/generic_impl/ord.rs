@@ -147,7 +147,7 @@ impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug> Query<OrdTrait<Ke
         }
     }
 
-    fn init(target: &Self::QueryArg) -> Self {
+    fn init(_target: &Self::QueryArg) -> Self {
         Self::default()
     }
 }
