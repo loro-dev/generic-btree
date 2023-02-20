@@ -1,3 +1,22 @@
+//! # generic-btree
+//!
+//! It's a safe btree crate for versatile purposes:
+//!
+//! - Rope
+//! - BTreeMap / BTreeSet
+//! - Run-length-encoding insert/delete
+//! - Range map that uses range as key
+//!
+//! ## Write buffer
+//!
+//! This crate provides a write buffer that can be used to store updates on ancestor nodes.
+//! For example, we may need to update a range of elements in B-Tree together. Normally, it
+//! would take O(n) time to update each element, where n is the number of elements.
+//! With write buffer, we can update all elements within O(log n). And the actual updates are
+//! done when we need to iterate or query the related elements.
+//!
+//!
+
 #![forbid(unsafe_code)]
 #![no_std]
 
@@ -19,8 +38,8 @@ pub type StackVec<T> = SmallVec<[T; 8]>;
 pub type HeapVec<T> = SmallVec<[T; 0]>;
 
 pub trait BTreeTrait {
-    type Elem: Debug;
-    type Cache: Debug + Default + Clone + Eq;
+    type Elem;
+    type Cache: Default + Clone + Eq;
     const MAX_LEN: usize;
 
     fn element_to_cache(element: &Self::Elem) -> Self::Cache;
@@ -46,7 +65,7 @@ pub trait BTreeTrait {
 }
 
 pub trait Query<B: BTreeTrait> {
-    type QueryArg: Debug + Clone;
+    type QueryArg: Clone;
 
     fn init(target: &Self::QueryArg) -> Self;
 
@@ -89,7 +108,6 @@ pub trait Query<B: BTreeTrait> {
     }
 }
 
-#[derive(Debug)]
 pub struct BTree<B: BTreeTrait> {
     nodes: Arena<Node<B>>,
     root: ArenaIndex,
@@ -244,7 +262,17 @@ struct Node<B: BTreeTrait> {
     children: HeapVec<Child<B::Cache>>,
 }
 
-impl<B: BTreeTrait> Debug for Node<B> {
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for BTree<B> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BTree")
+            .field("nodes", &self.nodes)
+            .field("root", &self.root)
+            .field("root_cache", &self.root_cache)
+            .finish()
+    }
+}
+
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for Node<B> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Node")
             .field("elements", &self.elements)
@@ -970,7 +998,7 @@ impl<B: BTreeTrait> BTree<B> {
             if node.is_internal() {
                 for child_info in node.children.iter() {
                     let child = self.get(child_info.arena);
-                    assert_eq!(child.calc_cache(), child_info.cache);
+                    assert!(child.calc_cache() == child_info.cache);
                 }
             }
 
