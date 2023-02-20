@@ -51,8 +51,8 @@ impl Rope {
         self.tree.iter()
     }
 
-    pub fn iter_range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = &char> {
-        self.tree.iter_range::<Finder>(range)
+    pub fn iter_range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = char> + '_ {
+        self.tree.iter_range::<Finder>(range).map(|x| *x.elem)
     }
 
     pub fn new() -> Self {

@@ -2,6 +2,7 @@
 
 use std::{
     fmt::Debug,
+    iter::Map,
     ops::{Deref, Range},
 };
 
@@ -200,11 +201,21 @@ pub struct QueryResult {
 
 /// A slice of elements in a leaf node of BTree.
 ///
-/// - `start` is Some(start_offset) when the slice is the first slice of the given range
-/// - `end` is Some(end_offset) when the slice is the last slice of the given range
+/// - `start` is Some(start_offset) when the slice is the first slice of the given range. i.e. the first element should be sliced.
+/// - `end` is Some(end_offset) when the slice is the last slice of the given range. i.e. the last element should be sliced.
+pub struct MutElemArrSlice<'a, Elem> {
+    pub elements: &'a mut [Elem],
+    pub start: Option<usize>,
+    pub end: Option<usize>,
+}
+
+/// A slice of element
+///
+/// - `start` is Some(start_offset) when it's first element of the given range.
+/// - `end` is Some(end_offset) when it's last element of the given range.
 #[derive(Debug)]
 pub struct ElemSlice<'a, Elem> {
-    pub elements: &'a mut [Elem],
+    pub elem: &'a Elem,
     pub start: Option<usize>,
     pub end: Option<usize>,
 }
@@ -480,7 +491,7 @@ impl<B: BTreeTrait> BTree<B> {
     pub fn update<Q, F>(&mut self, range: Range<Q::QueryArg>, f: &mut F)
     where
         Q: Query<B>,
-        F: FnMut(ElemSlice<'_, B::Elem>) -> bool,
+        F: FnMut(MutElemArrSlice<'_, B::Elem>) -> bool,
     {
         let start = self.query::<Q>(&range.start);
         let end = self.query::<Q>(&range.end);
@@ -504,7 +515,7 @@ impl<B: BTreeTrait> BTree<B> {
             } else {
                 node.elements.len()
             };
-            let should_update_cache = f(ElemSlice {
+            let should_update_cache = f(MutElemArrSlice {
                 elements: &mut node.elements[start_index..end_index],
                 start: if current_leaf == start_leaf {
                     Some(start.offset)
@@ -604,14 +615,17 @@ impl<B: BTreeTrait> BTree<B> {
         Some(path)
     }
 
-    pub fn iter_range<Q>(&self, range: Range<Q::QueryArg>) -> impl Iterator<Item = &B::Elem> + '_
+    pub fn iter_range<Q>(
+        &self,
+        range: Range<Q::QueryArg>,
+    ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_
     where
         Q: Query<B>,
     {
         let start = self.query::<Q>(&range.start);
         let end = self.query::<Q>(&range.end);
         let mut node_iter = iter::Iter::new(self, start.clone(), end.clone());
-        let mut elem_iter: Option<std::slice::Iter<'_, B::Elem>> = None;
+        let mut elem_iter: Option<Map<_, _>> = None;
         std::iter::from_fn(move || loop {
             if let Some(inner_elem_iter) = &mut elem_iter {
                 match inner_elem_iter.next() {
@@ -621,17 +635,30 @@ impl<B: BTreeTrait> BTree<B> {
             } else {
                 match node_iter.next() {
                     Some((idx, node)) => {
-                        let start = if idx.arena == start.node_path.last().unwrap().arena {
-                            start.elem_index
-                        } else {
-                            0
-                        };
-                        let end = if idx.arena == end.node_path.last().unwrap().arena {
-                            end.elem_index
-                        } else {
-                            node.elements.len()
-                        };
-                        elem_iter = Some(node.elements[start..end].iter());
+                        let (start_idx, start_offset) =
+                            if idx.arena == start.node_path.last().unwrap().arena {
+                                (start.elem_index, Some(start.offset))
+                            } else {
+                                (0, None)
+                            };
+                        let (end_idx, end_offset) =
+                            if idx.arena == end.node_path.last().unwrap().arena {
+                                (end.elem_index, Some(end.offset))
+                            } else {
+                                (node.elements.len(), None)
+                            };
+
+                        elem_iter = Some(node.elements[start_idx..end_idx].iter().enumerate().map(
+                            move |(i, x)| ElemSlice {
+                                elem: x,
+                                start: if i == 0 { start_offset } else { None },
+                                end: if i == end_idx - start_idx - 1 {
+                                    end_offset
+                                } else {
+                                    None
+                                },
+                            },
+                        ));
                     }
                     None => return None,
                 }
