@@ -64,10 +64,15 @@ pub trait BTreeTrait {
     }
 
     #[allow(unused)]
-    fn apply_write_buffer(
+    fn apply_write_buffer_to_elements(
         elements: &mut HeapVec<Self::Elem>,
-        write_buffer: &mut Self::WriteBuffer,
+        write_buffer: &Self::WriteBuffer,
     ) {
+        unimplemented!()
+    }
+
+    #[allow(unused)]
+    fn apply_write_buffer_to_nodes(children: &mut [Child<Self>], write_buffer: &Self::WriteBuffer) {
         unimplemented!()
     }
 
@@ -709,6 +714,29 @@ impl<B: BTreeTrait> BTree<B> {
             if g(&mut child.write_buffer) {
                 path[target_level] = Idx::new(child.arena, i);
                 add_path_to_dirty_map(&path, dirty_map)
+            }
+        }
+    }
+
+    /// Apply the write buffer all the way down the path
+    fn unbuffer_path(&mut self, path: PathRef) {
+        // root cannot have write buffer
+        for i in 0..path.len() - 1 {
+            let parent = path[i];
+            let child_idx = path[i + 1];
+            let (parent, child) = self.nodes.get2_mut(parent.arena, child_idx.arena);
+            let parent = parent.unwrap();
+            if parent.children[child_idx.arr].write_buffer.is_some() {
+                let child = child.unwrap();
+                if let Some(write_buffer) =
+                    core::mem::take(&mut parent.children[child_idx.arr].write_buffer)
+                {
+                    if child.is_internal() {
+                        B::apply_write_buffer_to_nodes(&mut child.children, &write_buffer)
+                    } else {
+                        B::apply_write_buffer_to_elements(&mut child.elements, &write_buffer)
+                    }
+                }
             }
         }
     }
