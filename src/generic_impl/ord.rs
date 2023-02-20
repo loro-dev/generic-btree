@@ -93,7 +93,7 @@ impl<Key, Value> Default for OrdTrait<Key, Value> {
 
 impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for OrdTrait<Key, Value> {
     type Elem = (Key, Value);
-
+    type WriteBuffer = ();
     type Cache = Option<(Key, Key)>;
 
     const MAX_LEN: usize = 16;
@@ -102,7 +102,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
         None
     }
 
-    fn calc_cache_internal(caches: &[crate::Child<Self::Cache>]) -> Self::Cache {
+    fn calc_cache_internal(caches: &[crate::Child<Self>]) -> Self::Cache {
         Some((
             caches[0].cache.as_ref().unwrap().0.clone(),
             caches[caches.len() - 1].cache.as_ref().unwrap().1.clone(),
@@ -125,7 +125,7 @@ impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug> Query<OrdTrait<Ke
     fn find_node(
         &mut self,
         target: &Self::QueryArg,
-        child_caches: &[crate::Child<Option<(Key, Key)>>],
+        child_caches: &[crate::Child<OrdTrait<Key, Value>>],
     ) -> crate::FindResult {
         for (i, child) in child_caches.iter().enumerate() {
             let (min, max) = child.cache.as_ref().unwrap();

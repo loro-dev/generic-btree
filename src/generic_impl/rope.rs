@@ -103,7 +103,7 @@ impl ToString for Rope {
 
 impl BTreeTrait for RopeTrait {
     type Elem = char;
-
+    type WriteBuffer = ();
     type Cache = usize;
 
     const MAX_LEN: usize = 32;
@@ -112,7 +112,7 @@ impl BTreeTrait for RopeTrait {
         1
     }
 
-    fn calc_cache_internal(caches: &[crate::Child<Self::Cache>]) -> Self::Cache {
+    fn calc_cache_internal(caches: &[crate::Child<Self>]) -> Self::Cache {
         caches.iter().map(|x| x.cache).sum::<usize>()
     }
 
@@ -142,7 +142,7 @@ impl Query<RopeTrait> for Finder {
     fn find_node(
         &mut self,
         _: &Self::QueryArg,
-        child_caches: &[crate::Child<usize>],
+        child_caches: &[crate::Child<RopeTrait>],
     ) -> FindResult {
         for (i, cache) in child_caches.iter().enumerate() {
             if self.left > cache.cache {

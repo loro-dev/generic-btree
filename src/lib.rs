@@ -40,6 +40,9 @@ pub type HeapVec<T> = SmallVec<[T; 0]>;
 pub trait BTreeTrait {
     type Elem;
     type Cache: Default + Clone + Eq;
+    /// Use () if you don't need write buffer.
+    /// Associated type default is still unstable so we don't provide default value.
+    type WriteBuffer: Clone;
     const MAX_LEN: usize;
 
     fn element_to_cache(element: &Self::Elem) -> Self::Cache;
@@ -60,7 +63,15 @@ pub trait BTreeTrait {
         unimplemented!()
     }
 
-    fn calc_cache_internal(caches: &[Child<Self::Cache>]) -> Self::Cache;
+    #[allow(unused)]
+    fn apply_write_buffer(
+        elements: &mut HeapVec<Self::Elem>,
+        write_buffer: &mut Self::WriteBuffer,
+    ) {
+        unimplemented!()
+    }
+
+    fn calc_cache_internal(caches: &[Child<Self>]) -> Self::Cache;
     fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache;
 }
 
@@ -69,11 +80,7 @@ pub trait Query<B: BTreeTrait> {
 
     fn init(target: &Self::QueryArg) -> Self;
 
-    fn find_node(
-        &mut self,
-        target: &Self::QueryArg,
-        child_caches: &[Child<B::Cache>],
-    ) -> FindResult;
+    fn find_node(&mut self, target: &Self::QueryArg, child_caches: &[Child<B>]) -> FindResult;
 
     fn find_element(&mut self, target: &Self::QueryArg, elements: &[B::Elem]) -> FindResult;
 
@@ -259,10 +266,16 @@ impl QueryResult {
 // TODO: use enum to save spaces
 struct Node<B: BTreeTrait> {
     elements: HeapVec<B::Elem>,
-    children: HeapVec<Child<B::Cache>>,
+    children: HeapVec<Child<B>>,
 }
 
-impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for BTree<B> {
+impl<
+        W: Debug,
+        Cache: Debug,
+        Elem: Debug,
+        B: BTreeTrait<Elem = Elem, Cache = Cache, WriteBuffer = W>,
+    > Debug for BTree<B>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("BTree")
             .field("nodes", &self.nodes)
@@ -272,7 +285,13 @@ impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug
     }
 }
 
-impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for Node<B> {
+impl<
+        W: Debug,
+        Cache: Debug,
+        Elem: Debug,
+        B: BTreeTrait<Elem = Elem, Cache = Cache, WriteBuffer = W>,
+    > Debug for Node<B>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Node")
             .field("elements", &self.elements)
@@ -281,6 +300,20 @@ impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug
     }
 }
 
+impl<
+        W: Debug,
+        Cache: Debug,
+        Elem: Debug,
+        B: BTreeTrait<Elem = Elem, Cache = Cache, WriteBuffer = W>,
+    > Debug for Child<B>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Child")
+            .field("cache", &self.cache)
+            .field("write_buffer", &self.write_buffer)
+            .finish()
+    }
+}
 impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for Node<B> {
     fn clone(&self) -> Self {
         Self {
@@ -290,20 +323,34 @@ impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for Node<B> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Child<Cache> {
+pub struct Child<B: ?Sized + BTreeTrait> {
     arena: ArenaIndex,
-    pub cache: Cache,
+    pub cache: B::Cache,
+    pub write_buffer: Option<B::WriteBuffer>,
 }
 
-impl<Cache> Child<Cache> {
+impl<B: BTreeTrait> Clone for Child<B> {
+    fn clone(&self) -> Self {
+        Self {
+            arena: self.arena,
+            cache: self.cache.clone(),
+            write_buffer: self.write_buffer.clone(),
+        }
+    }
+}
+
+impl<B: BTreeTrait> Child<B> {
     #[inline(always)]
-    pub fn cache(&self) -> &Cache {
+    pub fn cache(&self) -> &B::Cache {
         &self.cache
     }
 
-    fn new(arena: ArenaIndex, cache: Cache) -> Self {
-        Self { arena, cache }
+    fn new(arena: ArenaIndex, cache: B::Cache) -> Self {
+        Self {
+            arena,
+            cache,
+            write_buffer: None,
+        }
     }
 }
 
@@ -373,6 +420,8 @@ impl<B: BTreeTrait> Node<B> {
         }
     }
 }
+
+type DirtyMap = FxHashMap<(isize, ArenaIndex), HeapVec<Idx>>;
 
 impl<B: BTreeTrait> BTree<B> {
     #[inline]
@@ -536,62 +585,18 @@ impl<B: BTreeTrait> BTree<B> {
     where
         F: FnMut(MutElemArrSlice<'_, B::Elem>) -> bool,
     {
-        fn add_path_to_dirty_map(
-            path: &Path,
-            dirty_map: &mut FxHashMap<(isize, ArenaIndex), HeapVec<Idx>>,
-        ) {
-            let mut current = path.last().unwrap();
-            let mut parent_level = path.len() as isize - 2;
-            while parent_level >= 0 {
-                let parent = path.get(parent_level as usize).unwrap();
-                if let Some(arr) = dirty_map.get_mut(&(parent_level, parent.arena)) {
-                    arr.push(*current);
-                    // parent is already created by others, so all ancestors must also be created
-                    break;
-                } else {
-                    dirty_map.insert((parent_level, parent.arena), smallvec::smallvec![*current]);
-                    current = parent;
-                    parent_level -= 1;
-                }
-            }
-        }
-
         let start = range.start;
         let end = range.end;
         let start_leaf = start.node_path.last().unwrap();
         let mut path = start.node_path.clone();
         let end_leaf = end.node_path.last().unwrap();
-
-        let mut dirty_map: FxHashMap<(isize, ArenaIndex), HeapVec<Idx>> = FxHashMap::default();
+        type Level = isize; // always positive, use isize to avoid overflow
+        let mut dirty_map: FxHashMap<(Level, ArenaIndex), HeapVec<Idx>> = FxHashMap::default();
 
         loop {
             let current_leaf = path.last().unwrap();
-            let idx = *path.last().unwrap();
-            let node = self.get_mut(idx.arena);
-            let start_index = if current_leaf == start_leaf {
-                start.elem_index
-            } else {
-                0
-            };
-            let end_index = if current_leaf == end_leaf {
-                end.elem_index
-            } else {
-                node.elements.len()
-            };
-            let should_update_cache = f(MutElemArrSlice {
-                elements: &mut node.elements[start_index..end_index],
-                start: if current_leaf == start_leaf {
-                    Some(start.offset)
-                } else {
-                    None
-                },
-                end: if current_leaf == end_leaf {
-                    Some(end.offset)
-                } else {
-                    None
-                },
-            });
-
+            let slice = self.get_slice(&path, start_leaf, &start, end_leaf, &end);
+            let should_update_cache = f(slice);
             if should_update_cache {
                 // TODO: TEST THIS
                 add_path_to_dirty_map(&path, &mut dirty_map);
@@ -611,7 +616,141 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn update_dirty_map(&mut self, dirty_map: FxHashMap<(isize, ArenaIndex), HeapVec<Idx>>) {
+    /// Update the elements with buffer
+    ///
+    /// F and G should returns true if the cache need to be updated
+    ///
+    /// Update is not in the order of the elements
+    pub fn update_with_buffer<F, G>(&mut self, range: Range<QueryResult>, f: &mut F, mut g: G)
+    where
+        F: FnMut(MutElemArrSlice<'_, B::Elem>) -> bool,
+        G: FnMut(&mut Option<B::WriteBuffer>) -> bool,
+    {
+        let start = range.start;
+        let end = range.end;
+        let start_leaf = start.node_path.last().unwrap();
+        let end_leaf = end.node_path.last().unwrap();
+        type Level = isize; // always positive, use isize to avoid overflow
+        let mut dirty_map: FxHashMap<(Level, ArenaIndex), HeapVec<Idx>> = FxHashMap::default();
+        let max_same_parent_level = start
+            .node_path
+            .iter()
+            .zip(end.node_path.iter())
+            .take_while(|(a, b)| a.arena == b.arena)
+            .count()
+            - 1;
+        let leaf_level = start.node_path.len() - 1;
+
+        for path in Some(&start.node_path).iter().chain(
+            (if start_leaf == end_leaf {
+                None
+            } else {
+                Some(&end.node_path)
+            })
+            .iter(),
+        ) {
+            // all elements are in the same leaf
+            let slice = self.get_slice(path, start_leaf, &start, end_leaf, &end);
+            let should_update_cache = f(slice);
+
+            if should_update_cache {
+                add_path_to_dirty_map(path, &mut dirty_map);
+            }
+        }
+
+        if max_same_parent_level < leaf_level {
+            // write to buffer
+            self.write_to_buffer(
+                Some(&start),
+                Some(&end),
+                max_same_parent_level,
+                &mut g,
+                &mut dirty_map,
+            );
+
+            for parent_level in max_same_parent_level + 1..leaf_level {
+                self.write_to_buffer(Some(&start), None, parent_level, &mut g, &mut dirty_map);
+                self.write_to_buffer(None, Some(&end), parent_level, &mut g, &mut dirty_map);
+            }
+        }
+
+        if !dirty_map.is_empty() {
+            self.update_dirty_map(dirty_map);
+        }
+    }
+
+    fn write_to_buffer<G>(
+        &mut self,
+        start: Option<&QueryResult>,
+        end: Option<&QueryResult>,
+        parent_level: usize,
+        g: &mut G,
+        dirty_map: &mut DirtyMap,
+    ) where
+        G: FnMut(&mut Option<B::WriteBuffer>) -> bool,
+    {
+        let path = start
+            .map(|x| &x.node_path)
+            .unwrap_or_else(|| &end.unwrap().node_path);
+        let parent = self.nodes.get_mut(path[parent_level].arena).unwrap();
+        debug_assert!(parent.is_internal());
+        let target_level = parent_level + 1;
+        let mut path: Path = path[..=target_level].iter().cloned().collect();
+        let start_index = start
+            .map(|x| x.node_path[target_level].arr + 1)
+            .unwrap_or(0);
+        let end_index = end
+            .map(|x| x.node_path[target_level].arr)
+            .unwrap_or(parent.children.len());
+        for (i, child) in parent.children[start_index..end_index]
+            .iter_mut()
+            .enumerate()
+        {
+            if g(&mut child.write_buffer) {
+                path[target_level] = Idx::new(child.arena, i);
+                add_path_to_dirty_map(&path, dirty_map)
+            }
+        }
+    }
+
+    fn get_slice(
+        &mut self,
+        path: &Path,
+        start_leaf: &Idx,
+        start: &QueryResult,
+        end_leaf: &Idx,
+        end: &QueryResult,
+    ) -> MutElemArrSlice<<B as BTreeTrait>::Elem> {
+        let current_leaf = path.last().unwrap();
+        let idx = *path.last().unwrap();
+        let node = self.get_mut(idx.arena);
+        let start_index = if current_leaf == start_leaf {
+            start.elem_index
+        } else {
+            0
+        };
+
+        let end_index = if current_leaf == end_leaf {
+            end.elem_index
+        } else {
+            node.elements.len()
+        };
+        MutElemArrSlice {
+            elements: &mut node.elements[start_index..end_index],
+            start: if current_leaf == start_leaf {
+                Some(start.offset)
+            } else {
+                None
+            },
+            end: if current_leaf == end_leaf {
+                Some(end.offset)
+            } else {
+                None
+            },
+        }
+    }
+
+    fn update_dirty_map(&mut self, dirty_map: DirtyMap) {
         let mut dirty_set: StackVec<((isize, ArenaIndex), _)> = dirty_map.into_iter().collect();
         dirty_set.sort_unstable_by_key(|x| -x.0 .0);
         for ((_, parent), children) in dirty_set {
@@ -750,6 +889,7 @@ impl<B: BTreeTrait> BTree<B> {
             Child {
                 arena: right,
                 cache: right_cache,
+                write_buffer: Default::default(),
             },
         );
         // don't need to recursive update cache
@@ -761,7 +901,7 @@ impl<B: BTreeTrait> BTree<B> {
         parent_path: PathRef,
         index: usize,
         new_cache: B::Cache,
-        node: Child<B::Cache>,
+        node: Child<B>,
     ) {
         if parent_path.is_empty() {
             self.split_root(new_cache, node);
@@ -777,7 +917,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn split_root(&mut self, new_cache: B::Cache, new_node: Child<B::Cache>) {
+    fn split_root(&mut self, new_cache: B::Cache, new_node: Child<B>) {
         let root = self.get_mut(self.root);
         let left: Node<B> = core::mem::take(root);
         let right = new_node;
@@ -987,6 +1127,23 @@ impl<B: BTreeTrait> BTree<B> {
 
     pub fn root_cache(&self) -> &B::Cache {
         &self.root_cache
+    }
+}
+
+fn add_path_to_dirty_map(path: &[Idx], dirty_map: &mut DirtyMap) {
+    let mut current = path.last().unwrap();
+    let mut parent_level = path.len() as isize - 2;
+    while parent_level >= 0 {
+        let parent = path.get(parent_level as usize).unwrap();
+        if let Some(arr) = dirty_map.get_mut(&(parent_level, parent.arena)) {
+            arr.push(*current);
+            // parent is already created by others, so all ancestors must also be created
+            break;
+        } else {
+            dirty_map.insert((parent_level, parent.arena), smallvec::smallvec![*current]);
+            current = parent;
+            parent_level -= 1;
+        }
     }
 }
 
