@@ -109,12 +109,12 @@ fn set_value(slice: generic_btree::MutElemArrSlice<Elem>, value: isize) -> bool 
         None => 0,
     };
     let drain_end = match slice.end {
-        Some((end_index, end_offset)) => {
+        Some((end_index, end_offset)) if end_index < slice.elements.len() => {
             len += end_offset;
             slice.elements[end_index].len -= end_offset;
             end_index
         }
-        None => slice.elements.len(),
+        _ => slice.elements.len(),
     };
     len += slice
         .elements
@@ -122,7 +122,7 @@ fn set_value(slice: generic_btree::MutElemArrSlice<Elem>, value: isize) -> bool 
         .map(|x| x.len)
         .sum::<usize>();
     slice.elements.insert(
-        drain_start + 1,
+        drain_start,
         Elem {
             value: Some(value),
             len,
@@ -171,5 +171,33 @@ impl BTreeTrait for RangeNumMapTrait {
 
     fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache {
         elements.iter().map(|c| c.len).sum()
+    }
+
+    fn apply_write_buffer_to_elements(
+        elements: &mut generic_btree::HeapVec<Self::Elem>,
+        write_buffer: &Self::WriteBuffer,
+    ) {
+        elements.iter_mut().for_each(|x| {
+            x.value = match write_buffer {
+                Modifier::Add(value) => x.value.map(|x| x + value),
+                Modifier::Set(value) => Some(*value),
+            }
+        });
+    }
+
+    fn apply_write_buffer_to_nodes(
+        children: &mut [generic_btree::Child<Self>],
+        write_buffer: &Self::WriteBuffer,
+    ) {
+        children.iter_mut().for_each(|x| {
+            let v = match write_buffer {
+                Modifier::Add(value) => x.write_buffer.as_ref().map(|x| match x {
+                    Modifier::Add(x) => Modifier::Add(x + value),
+                    Modifier::Set(x) => Modifier::Set(x + value),
+                }),
+                Modifier::Set(value) => Some(Modifier::Set(*value)),
+            };
+            x.write_buffer = v;
+        });
     }
 }

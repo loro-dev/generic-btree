@@ -37,18 +37,22 @@ impl<B: BTreeTrait + UseLengthFinder<B>> Query<B> for LengthFinder {
         _: &Self::QueryArg,
         child_caches: &[crate::Child<B>],
     ) -> crate::FindResult {
+        let mut last_left = self.left;
         for (i, cache) in child_caches.iter().enumerate() {
             let len = B::get_len(&cache.cache);
-            if self.left > len {
+            if self.left >= len {
+                last_left = self.left;
                 self.left -= len;
             } else {
                 return FindResult::new_found(i, self.left);
             }
         }
 
-        FindResult::new_missing(child_caches.len(), self.left)
+        self.left = last_left;
+        FindResult::new_missing(child_caches.len() - 1, last_left)
     }
 
+    #[inline]
     fn find_element(
         &mut self,
         _: &Self::QueryArg,

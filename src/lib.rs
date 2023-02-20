@@ -547,12 +547,13 @@ impl<B: BTreeTrait> BTree<B> {
             node_path: smallvec::smallvec![Idx::new(index, 0)],
             elem_index: 0,
             offset: 0,
-            found: false,
+            found: true,
         };
         while node.is_internal() {
             let result = finder.find_node(query, &node.children);
             let i = result.index;
             let i = i.min(node.children.len() - 1);
+            ans.found = ans.found && result.found;
             index = node.children[i].arena;
             node = self.nodes.get(index).unwrap();
             ans.node_path.push(Idx::new(index, i));
@@ -560,17 +561,18 @@ impl<B: BTreeTrait> BTree<B> {
 
         let result = finder.find_element(query, &node.elements);
         ans.elem_index = result.index;
-        ans.found = result.found;
+        ans.found = ans.found && result.found;
         ans.offset = result.offset;
         (ans, finder)
     }
 
     #[inline]
-    pub fn get_elem(&self, q: QueryResult) -> Option<&B::Elem> {
+    pub fn get_elem(&mut self, q: QueryResult) -> Option<&B::Elem> {
         if !q.found {
             return None;
         }
 
+        self.unbuffer_path(PathRef::from(&q.node_path));
         let index = *q.node_path.last().unwrap();
         let node = self.nodes.get(index.arena)?;
         node.elements.get(q.elem_index)
@@ -756,26 +758,15 @@ impl<B: BTreeTrait> BTree<B> {
         let current_leaf = path.last().unwrap();
         let idx = *path.last().unwrap();
         let node = self.get_mut(idx.arena);
-        let start_index = if current_leaf == start_leaf {
-            start.elem_index
-        } else {
-            0
-        };
-
-        let end_index = if current_leaf == end_leaf {
-            end.elem_index
-        } else {
-            node.elements.len()
-        };
         MutElemArrSlice {
             elements: &mut node.elements,
             start: if current_leaf == start_leaf {
-                Some((start_index, start.offset))
+                Some((start.elem_index, start.offset))
             } else {
                 None
             },
             end: if current_leaf == end_leaf {
-                Some((end_index, end.offset))
+                Some((end.elem_index, end.offset))
             } else {
                 None
             },

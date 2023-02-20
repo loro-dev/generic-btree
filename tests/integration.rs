@@ -21,4 +21,19 @@ mod test_range_num_map {
         assert_eq!(range_map.get(9), Some(0));
         assert_eq!(range_map.get(10), None);
     }
+
+    #[test]
+    fn buffer() {
+        let mut range_map = RangeNumMap::new();
+        for i in 0..100 {
+            range_map.insert(i..i + 1, i as isize);
+        }
+        for i in 0..100 {
+            assert_eq!(range_map.get(i), Some(i as isize))
+        }
+        range_map.insert(0..100, 100);
+        for i in 0..100 {
+            assert_eq!(range_map.get(i), Some(100))
+        }
+    }
 }
