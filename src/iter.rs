@@ -1,6 +1,6 @@
 use smallvec::SmallVec;
 
-use crate::{BTree, BTreeTrait, Idx, Node, Path, PathRef, Query, QueryResult};
+use crate::{BTree, BTreeTrait, Idx, Node, Path, PathRef, Query, QueryResult, StackVec};
 
 pub(super) struct Iter<'a, B: BTreeTrait> {
     tree: &'a BTree<B>,
@@ -18,7 +18,7 @@ pub struct Drain<'a, B: BTreeTrait, Q: Query<B>> {
     end_query: Q::QueryArg,
     end_result: QueryResult,
 
-    reversed_elements: Vec<B::Elem>,
+    reversed_elements: StackVec<B::Elem>,
 }
 
 impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
@@ -37,7 +37,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
             current_path: start_result.node_path.clone(),
             start_result,
             end_result,
-            reversed_elements: Vec::with_capacity(B::MAX_LEN),
+            reversed_elements: StackVec::with_capacity(B::MAX_LEN),
         }
     }
 }

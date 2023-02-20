@@ -18,7 +18,7 @@ documentation = "https://docs.rs/generic-btree"
 [dependencies]
 fxhash = "0.2.1"
 smallvec = { version = "1.10.0", features = [] }
-thunderdome = "0.6.0"
+thunderdome = { version = "0.6.0", features = [] }
 
 
 [dev-dependencies]

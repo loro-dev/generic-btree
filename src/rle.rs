@@ -1,4 +1,4 @@
-use std::ops::RangeBounds;
+use core::ops::RangeBounds;
 
 pub trait Sliceable<T = usize> {
     fn slice(&self, range: impl RangeBounds<T>) -> Self;

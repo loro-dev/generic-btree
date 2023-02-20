@@ -1,6 +1,6 @@
 use arbitrary::{Arbitrary, Unstructured};
 use criterion::{criterion_group, criterion_main, Criterion};
-use generic_btree::Rope;
+use generic_btree::{HeapVec, Rope};
 use jumprope::JumpRope;
 use rand::{Rng, SeedableRng};
 
@@ -12,7 +12,7 @@ enum Action {
 
 pub fn bench(c: &mut Criterion) {
     let mut rng = rand::rngs::StdRng::seed_from_u64(123);
-    let data: Vec<u8> = (0..1_000_000).map(|_| rng.gen()).collect();
+    let data: HeapVec<u8> = (0..1_000_000).map(|_| rng.gen()).collect();
     let mut gen = Unstructured::new(&data);
     let actions: [Action; 10_000] = gen.arbitrary().unwrap();
     c.bench_function("Rope 10K insert/delete", |b| {

@@ -1,10 +1,10 @@
-use std::fmt::Debug;
+use core::fmt::Debug;
 
 use crate::{BTree, BTreeTrait, FindResult, Query};
 
 #[derive(Debug)]
 struct OrdTrait<Key, Value> {
-    _phantom: std::marker::PhantomData<(Key, Value)>,
+    _phantom: core::marker::PhantomData<(Key, Value)>,
 }
 
 #[derive(Debug)]
@@ -156,17 +156,19 @@ impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug> Query<OrdTrait<Ke
 mod test {
     use rand::{Rng, SeedableRng};
 
+    use crate::HeapVec;
+
     use super::*;
 
     #[test]
     fn test() {
         let mut tree: OrdTreeSet<u64> = OrdTreeSet::new();
         let mut rng = rand::rngs::StdRng::seed_from_u64(123);
-        let mut data: Vec<u64> = (0..10_000).map(|_| rng.gen()).collect();
+        let mut data: HeapVec<u64> = (0..10_000).map(|_| rng.gen()).collect();
         for &value in data.iter() {
             tree.insert(value);
         }
         data.sort_unstable();
-        assert_eq!(tree.iter().copied().collect::<Vec<_>>(), data);
+        assert_eq!(tree.iter().copied().collect::<HeapVec<_>>(), data);
     }
 }

@@ -1,5 +1,5 @@
 use arbitrary::{Arbitrary, Unstructured};
-use generic_btree::Rope;
+use generic_btree::{HeapVec, Rope};
 use rand::{Rng, SeedableRng};
 
 #[derive(Arbitrary, Debug, Clone, Copy)]
@@ -10,7 +10,7 @@ enum Action {
 
 pub fn main() {
     let mut rng = rand::rngs::StdRng::seed_from_u64(123);
-    let data: Vec<u8> = (0..1_000_000).map(|_| rng.gen()).collect();
+    let data: HeapVec<u8> = (0..1_000_000).map(|_| rng.gen()).collect();
     let mut gen = Unstructured::new(&data);
     let actions: [Action; 10_000] = gen.arbitrary().unwrap();
 

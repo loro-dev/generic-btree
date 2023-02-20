@@ -1,8 +1,10 @@
-use std::ops::RangeBounds;
+use core::ops::{Range, RangeBounds};
+extern crate alloc;
 
+use alloc::string::{String, ToString};
 use smallvec::SmallVec;
 
-use crate::{BTree, BTreeTrait, FindResult, Query, SmallElemVec};
+use crate::{BTree, BTreeTrait, FindResult, HeapVec, Query, SmallElemVec};
 
 struct Finder {
     left: usize,
@@ -35,14 +37,14 @@ impl Rope {
 
     pub fn delete_range(&mut self, range: impl RangeBounds<usize>) {
         let start = match range.start_bound() {
-            std::ops::Bound::Included(x) => *x,
-            std::ops::Bound::Excluded(x) => *x + 1,
-            std::ops::Bound::Unbounded => 0,
+            core::ops::Bound::Included(x) => *x,
+            core::ops::Bound::Excluded(x) => *x + 1,
+            core::ops::Bound::Unbounded => 0,
         };
         let end = match range.end_bound() {
-            std::ops::Bound::Included(&x) => x + 1,
-            std::ops::Bound::Excluded(&x) => x,
-            std::ops::Bound::Unbounded => self.len(),
+            core::ops::Bound::Included(&x) => x + 1,
+            core::ops::Bound::Excluded(&x) => x,
+            core::ops::Bound::Unbounded => self.len(),
         };
         self.tree.drain::<Finder>(start..end);
     }
@@ -51,7 +53,7 @@ impl Rope {
         self.tree.iter()
     }
 
-    pub fn iter_range(&self, range: std::ops::Range<usize>) -> impl Iterator<Item = char> + '_ {
+    pub fn iter_range(&self, range: Range<usize>) -> impl Iterator<Item = char> + '_ {
         self.tree.iter_range::<Finder>(range).map(|x| *x.elem)
     }
 
@@ -65,13 +67,14 @@ impl Rope {
 
     fn update_in_place(&mut self, pos: usize, new: &str) {
         let mut iter = new.chars();
-        self.tree
-            .update::<Finder, _>(pos..pos + new.len(), &mut |slice| {
-                for c in slice.elements.iter_mut() {
-                    *c = iter.next().unwrap();
-                }
-                false
-            });
+        let start = self.tree.query::<Finder>(&pos);
+        let end = self.tree.query::<Finder>(&(pos + new.len()));
+        self.tree.update::<_>(start..end, &mut |slice| {
+            for c in slice.elements.iter_mut() {
+                *c = iter.next().unwrap();
+            }
+            false
+        });
     }
 
     pub fn check(&self) {
@@ -101,7 +104,7 @@ impl BTreeTrait for RopeTrait {
 
     type Cache = usize;
 
-    const MAX_LEN: usize = 128;
+    const MAX_LEN: usize = 32;
 
     fn element_to_cache(_: &Self::Elem) -> Self::Cache {
         1
@@ -115,15 +118,15 @@ impl BTreeTrait for RopeTrait {
         elements.len()
     }
 
-    fn insert(elements: &mut Vec<Self::Elem>, index: usize, _: usize, elem: Self::Elem) {
+    fn insert(elements: &mut HeapVec<Self::Elem>, index: usize, _: usize, elem: Self::Elem) {
         elements.insert(index, elem);
     }
 
-    fn insert_batch(elements: &mut Vec<Self::Elem>, index: usize, _: usize, elem: &[Self::Elem])
+    fn insert_batch(elements: &mut HeapVec<Self::Elem>, index: usize, _: usize, elem: &[Self::Elem])
     where
         Self::Elem: Clone,
     {
-        elements.splice(index..index, elem.iter().cloned());
+        elements.insert_many(index, elem.iter().cloned());
     }
 }
 
@@ -160,7 +163,7 @@ impl Query<RopeTrait> for Finder {
     }
 
     fn delete(
-        elements: &mut Vec<char>,
+        elements: &mut HeapVec<char>,
         _: &Self::QueryArg,
         elem_index: usize,
         _: usize,
@@ -177,7 +180,7 @@ impl Query<RopeTrait> for Finder {
     }
 
     fn delete_range(
-        elements: &mut Vec<char>,
+        elements: &mut HeapVec<char>,
         _: &Self::QueryArg,
         _: &Self::QueryArg,
         start: Option<crate::QueryResult>,
@@ -273,7 +276,7 @@ mod test {
         Delete { pos: u8, len: u8 },
     }
 
-    fn fuzz(data: Vec<Action>) {
+    fn fuzz(data: HeapVec<Action>) {
         let mut rope = Rope::new();
         let mut truth = String::new();
         for action in data {
@@ -304,6 +307,7 @@ mod test {
     }
 
     use ctor::ctor;
+    use smallvec::smallvec as vec;
     use Action::*;
 
     #[test]
@@ -461,7 +465,7 @@ mod test {
 
     #[test]
     fn fuzz_empty() {
-        fuzz(vec![])
+        fuzz(smallvec::smallvec![])
     }
 
     #[ctor]
