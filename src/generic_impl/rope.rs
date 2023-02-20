@@ -32,7 +32,7 @@ impl Rope {
     pub fn insert(&mut self, index: usize, elem: &str) {
         let result = self.tree.query::<Finder>(&index);
         self.tree
-            .batch_insert_by_query_result(result, &elem.chars().collect::<SmallVec<[char; 16]>>());
+            .batch_insert_by_query_result(result, elem.chars().collect::<SmallVec<[char; 16]>>());
     }
 
     pub fn delete_range(&mut self, range: impl RangeBounds<usize>) {
@@ -54,7 +54,9 @@ impl Rope {
     }
 
     pub fn iter_range(&self, range: Range<usize>) -> impl Iterator<Item = char> + '_ {
-        self.tree.iter_range::<Finder>(range).map(|x| *x.elem)
+        self.tree
+            .iter_range(self.tree.range::<Finder>(range))
+            .map(|x| *x.elem)
     }
 
     pub fn new() -> Self {
@@ -122,11 +124,15 @@ impl BTreeTrait for RopeTrait {
         elements.insert(index, elem);
     }
 
-    fn insert_batch(elements: &mut HeapVec<Self::Elem>, index: usize, _: usize, elem: &[Self::Elem])
-    where
+    fn insert_batch(
+        elements: &mut HeapVec<Self::Elem>,
+        index: usize,
+        _: usize,
+        elem: impl IntoIterator<Item = Self::Elem>,
+    ) where
         Self::Elem: Clone,
     {
-        elements.insert_many(index, elem.iter().cloned());
+        elements.insert_many(index, elem.into_iter());
     }
 }
 

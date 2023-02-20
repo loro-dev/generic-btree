@@ -34,7 +34,7 @@ pub trait BTreeTrait {
         elements: &mut HeapVec<Self::Elem>,
         index: usize,
         offset: usize,
-        elem: &[Self::Elem],
+        new_elements: impl IntoIterator<Item = Self::Elem>,
     ) where
         Self::Elem: Clone,
     {
@@ -312,6 +312,7 @@ impl<B: BTreeTrait> Node<B> {
         }
     }
 
+    #[inline]
     pub fn len(&self) -> usize {
         if self.is_internal() {
             self.children.len()
@@ -320,6 +321,7 @@ impl<B: BTreeTrait> Node<B> {
         }
     }
 
+    #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -345,6 +347,7 @@ impl<B: BTreeTrait> Node<B> {
 }
 
 impl<B: BTreeTrait> BTree<B> {
+    #[inline]
     pub fn new() -> Self {
         let mut arena = Arena::new();
         let root = arena.insert(Node::new());
@@ -355,6 +358,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
+    #[inline]
     pub fn node_len(&self) -> usize {
         self.nodes.len()
     }
@@ -383,17 +387,25 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    pub fn batch_insert_by_query_result(&mut self, result: QueryResult, data: &[B::Elem])
-    where
+    pub fn batch_insert_by_query_result(
+        &mut self,
+        result: QueryResult,
+        data: impl IntoIterator<Item = B::Elem>,
+    ) where
         B::Elem: Clone,
     {
         let index = *result.node_path.last().unwrap();
         let node = self.nodes.get_mut(index.arena).unwrap();
         if result.found {
-            B::insert_batch(&mut node.elements, result.elem_index, result.offset, data);
+            B::insert_batch(
+                &mut node.elements,
+                result.elem_index,
+                result.offset,
+                data.into_iter(),
+            );
         } else {
             node.elements
-                .insert_many(result.elem_index, data.iter().cloned())
+                .insert_many(result.elem_index, data.into_iter())
         }
 
         let is_full = node.is_full();
@@ -434,7 +446,7 @@ impl<B: BTreeTrait> BTree<B> {
         true
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn query<Q>(&self, query: &Q::QueryArg) -> QueryResult
     where
         Q: Query<B>,
@@ -471,6 +483,7 @@ impl<B: BTreeTrait> BTree<B> {
         (ans, finder)
     }
 
+    #[inline]
     pub fn get_elem(&self, q: QueryResult) -> &B::Elem {
         let index = *q.node_path.last().unwrap();
         let node = self.nodes.get(index.arena).unwrap();
@@ -627,15 +640,20 @@ impl<B: BTreeTrait> BTree<B> {
         Some(path)
     }
 
-    pub fn iter_range<Q>(
-        &self,
-        range: Range<Q::QueryArg>,
-    ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_
+    #[inline]
+    pub fn range<Q>(&self, range: Range<Q::QueryArg>) -> Range<QueryResult>
     where
         Q: Query<B>,
     {
-        let start = self.query::<Q>(&range.start);
-        let end = self.query::<Q>(&range.end);
+        self.query::<Q>(&range.start)..self.query::<Q>(&range.end)
+    }
+
+    pub fn iter_range(
+        &self,
+        range: Range<QueryResult>,
+    ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
+        let start = range.start;
+        let end = range.end;
         let mut node_iter = iter::Iter::new(self, start.clone(), end.clone());
         let mut elem_iter: Option<Map<_, _>> = None;
         core::iter::from_fn(move || loop {
