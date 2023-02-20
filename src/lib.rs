@@ -234,12 +234,12 @@ pub struct QueryResult {
 
 /// A slice of elements in a leaf node of BTree.
 ///
-/// - `start` is Some(start_offset) when the slice is the first slice of the given range. i.e. the first element should be sliced.
-/// - `end` is Some(end_offset) when the slice is the last slice of the given range. i.e. the last element should be sliced.
+/// - `start` is Some((start_index, start_offset)) when the slice is the first slice of the given range. i.e. the first element should be sliced.
+/// - `end`   is Some((end_index, end_offset))     when the slice is the last  slice of the given range. i.e. the last  element should be sliced.
 pub struct MutElemArrSlice<'a, Elem> {
-    pub elements: &'a mut [Elem],
-    pub start: Option<usize>,
-    pub end: Option<usize>,
+    pub elements: &'a mut HeapVec<Elem>,
+    pub start: Option<(usize, usize)>,
+    pub end: Option<(usize, usize)>,
 }
 
 /// A slice of element
@@ -566,10 +566,14 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     #[inline]
-    pub fn get_elem(&self, q: QueryResult) -> &B::Elem {
+    pub fn get_elem(&self, q: QueryResult) -> Option<&B::Elem> {
+        if !q.found {
+            return None;
+        }
+
         let index = *q.node_path.last().unwrap();
-        let node = self.nodes.get(index.arena).unwrap();
-        &node.elements[q.elem_index]
+        let node = self.nodes.get(index.arena)?;
+        node.elements.get(q.elem_index)
     }
 
     pub fn drain<Q>(&mut self, range: Range<Q::QueryArg>) -> iter::Drain<B, Q>
@@ -629,7 +633,7 @@ impl<B: BTreeTrait> BTree<B> {
     pub fn update_with_buffer<F, G>(&mut self, range: Range<QueryResult>, f: &mut F, mut g: G)
     where
         F: FnMut(MutElemArrSlice<'_, B::Elem>) -> bool,
-        G: FnMut(&mut Option<B::WriteBuffer>) -> bool,
+        G: FnMut(&mut Option<B::WriteBuffer>, &B::Cache) -> bool,
     {
         let start = range.start;
         let end = range.end;
@@ -692,7 +696,7 @@ impl<B: BTreeTrait> BTree<B> {
         g: &mut G,
         dirty_map: &mut DirtyMap,
     ) where
-        G: FnMut(&mut Option<B::WriteBuffer>) -> bool,
+        G: FnMut(&mut Option<B::WriteBuffer>, &B::Cache) -> bool,
     {
         let path = start
             .map(|x| &x.node_path)
@@ -711,7 +715,7 @@ impl<B: BTreeTrait> BTree<B> {
             .iter_mut()
             .enumerate()
         {
-            if g(&mut child.write_buffer) {
+            if g(&mut child.write_buffer, &child.cache) {
                 path[target_level] = Idx::new(child.arena, i);
                 add_path_to_dirty_map(&path, dirty_map)
             }
@@ -764,14 +768,14 @@ impl<B: BTreeTrait> BTree<B> {
             node.elements.len()
         };
         MutElemArrSlice {
-            elements: &mut node.elements[start_index..end_index],
+            elements: &mut node.elements,
             start: if current_leaf == start_leaf {
-                Some(start.offset)
+                Some((start_index, start.offset))
             } else {
                 None
             },
             end: if current_leaf == end_leaf {
-                Some(end.offset)
+                Some((end_index, end.offset))
             } else {
                 None
             },

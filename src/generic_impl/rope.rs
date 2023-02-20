@@ -4,11 +4,9 @@ extern crate alloc;
 use alloc::string::{String, ToString};
 use smallvec::SmallVec;
 
-use crate::{BTree, BTreeTrait, FindResult, HeapVec, Query, SmallElemVec};
+use crate::{BTree, BTreeTrait, FindResult, HeapVec, LengthFinder};
 
-struct Finder {
-    left: usize,
-}
+use super::len_finder::UseLengthFinder;
 
 #[derive(Debug)]
 struct RopeTrait;
@@ -16,6 +14,23 @@ struct RopeTrait;
 #[derive(Debug)]
 pub struct Rope {
     tree: BTree<RopeTrait>,
+}
+
+impl UseLengthFinder<RopeTrait> for RopeTrait {
+    fn get_len(cache: &<Self as BTreeTrait>::Cache) -> usize {
+        *cache
+    }
+
+    fn find_element_by_offset(
+        elements: &[<Self as BTreeTrait>::Elem],
+        offset: usize,
+    ) -> crate::FindResult {
+        if offset < elements.len() {
+            FindResult::new_found(offset, 0)
+        } else {
+            FindResult::new_missing(elements.len(), offset - elements.len())
+        }
+    }
 }
 
 impl Rope {
@@ -30,7 +45,7 @@ impl Rope {
     }
 
     pub fn insert(&mut self, index: usize, elem: &str) {
-        let result = self.tree.query::<Finder>(&index);
+        let result = self.tree.query::<LengthFinder>(&index);
         self.tree
             .batch_insert_by_query_result(result, elem.chars().collect::<SmallVec<[char; 16]>>());
     }
@@ -46,7 +61,7 @@ impl Rope {
             core::ops::Bound::Excluded(&x) => x,
             core::ops::Bound::Unbounded => self.len(),
         };
-        self.tree.drain::<Finder>(start..end);
+        self.tree.drain::<LengthFinder>(start..end);
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &char> {
@@ -55,7 +70,7 @@ impl Rope {
 
     pub fn iter_range(&self, range: Range<usize>) -> impl Iterator<Item = char> + '_ {
         self.tree
-            .iter_range(self.tree.range::<Finder>(range))
+            .iter_range(self.tree.range::<LengthFinder>(range))
             .map(|x| *x.elem)
     }
 
@@ -69,8 +84,8 @@ impl Rope {
 
     fn update_in_place(&mut self, pos: usize, new: &str) {
         let mut iter = new.chars();
-        let start = self.tree.query::<Finder>(&pos);
-        let end = self.tree.query::<Finder>(&(pos + new.len()));
+        let start = self.tree.query::<LengthFinder>(&pos);
+        let end = self.tree.query::<LengthFinder>(&(pos + new.len()));
         self.tree.update::<_>(start..end, &mut |slice| {
             for c in slice.elements.iter_mut() {
                 *c = iter.next().unwrap();
@@ -133,118 +148,6 @@ impl BTreeTrait for RopeTrait {
         Self::Elem: Clone,
     {
         elements.insert_many(index, elem.into_iter());
-    }
-}
-
-impl Query<RopeTrait> for Finder {
-    type QueryArg = usize;
-
-    fn find_node(
-        &mut self,
-        _: &Self::QueryArg,
-        child_caches: &[crate::Child<RopeTrait>],
-    ) -> FindResult {
-        for (i, cache) in child_caches.iter().enumerate() {
-            if self.left > cache.cache {
-                self.left -= cache.cache;
-            } else {
-                return FindResult::new_found(i, self.left);
-            }
-        }
-
-        FindResult::new_missing(child_caches.len(), self.left)
-    }
-
-    fn find_element(&mut self, _: &Self::QueryArg, elements: &[char]) -> crate::FindResult {
-        if self.left >= elements.len() {
-            self.left -= elements.len();
-            return FindResult::new_missing(elements.len(), self.left);
-        }
-
-        FindResult::new_found(self.left, 0)
-    }
-
-    fn init(target: &Self::QueryArg) -> Self {
-        Self { left: *target }
-    }
-
-    fn delete(
-        elements: &mut HeapVec<char>,
-        _: &Self::QueryArg,
-        elem_index: usize,
-        _: usize,
-    ) -> Option<char> {
-        if elem_index >= elements.len() {
-            return None;
-        }
-
-        if elem_index < elements.len() {
-            Some(elements.remove(elem_index))
-        } else {
-            None
-        }
-    }
-
-    fn delete_range(
-        elements: &mut HeapVec<char>,
-        _: &Self::QueryArg,
-        _: &Self::QueryArg,
-        start: Option<crate::QueryResult>,
-        end: Option<crate::QueryResult>,
-    ) -> SmallElemVec<char> {
-        fn drain_start(start: crate::QueryResult, elements: &mut [char]) -> usize {
-            if start.offset == 0 || start.elem_index >= elements.len() {
-                start.elem_index
-            } else if start.offset == 1 {
-                start.elem_index + 1
-            } else {
-                unreachable!()
-            }
-        }
-
-        fn drain_end(end: crate::QueryResult, elements: &mut [char]) -> usize {
-            if end.offset == 0 || end.elem_index >= elements.len() {
-                end.elem_index
-            } else if 1 == end.offset {
-                end.elem_index + 1
-            } else {
-                unreachable!()
-            }
-        }
-
-        if elements.is_empty() {
-            return SmallElemVec::new();
-        }
-
-        match (start, end) {
-            (None, None) => elements.drain(..).collect(),
-            (None, Some(end)) => {
-                let end = drain_end(end, elements);
-                elements.drain(..end).collect()
-            }
-            (Some(start), None) => {
-                let start = drain_start(start, elements);
-                elements.drain(start..).collect()
-            }
-            (Some(start), Some(end)) => {
-                if start.elem_index == end.elem_index {
-                    if elements.len() <= start.elem_index || start.offset == end.offset {
-                        SmallElemVec::new()
-                    } else {
-                        assert_eq!(start.offset, 0);
-                        assert_eq!(end.offset, 1);
-                        let mut ans = SmallElemVec::new();
-                        ans.push(elements[start.elem_index]);
-                        elements.remove(start.elem_index);
-                        ans
-                    }
-                } else {
-                    let start = drain_start(start, elements);
-                    let end = drain_end(end, elements);
-                    elements.drain(start..end).collect()
-                }
-            }
-        }
     }
 }
 
