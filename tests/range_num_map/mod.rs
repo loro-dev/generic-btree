@@ -1,17 +1,18 @@
 use std::{ops::Range, usize};
 
-use generic_btree::{BTree, BTreeTrait, LengthFinder, UseLengthFinder};
+use generic_btree::{BTree, BTreeTrait, LengthFinder, MutElemArrSlice, UseLengthFinder};
 
 /// This struct keep the mapping of ranges to numbers
 pub struct RangeNumMap(BTree<RangeNumMapTrait>);
 struct RangeNumMapTrait;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 enum Modifier {
     Add(isize),
     Set(isize),
 }
 
+#[derive(Debug)]
 struct Elem {
     value: Option<isize>,
     len: usize,
@@ -34,11 +35,26 @@ impl RangeNumMap {
         }
 
         let range = self.0.range::<LengthFinder>(range);
-        self.0
-            .update_with_buffer(range, &mut |slice| set_value(slice, value), |buffer, _| {
+        self.0.update_with_buffer(
+            range,
+            &mut |mut slice| {
+                let before_len = if cfg!(debug_assert) {
+                    slice.elements.iter().map(|x| x.len).sum()
+                } else {
+                    0
+                };
+                let ans = set_value(&mut slice, value);
+                if cfg!(debug_assert) {
+                    let after_len = slice.elements.iter().map(|x| x.len).sum();
+                    assert_eq!(before_len, after_len);
+                }
+                ans
+            },
+            |buffer, _| {
                 *buffer = Some(Modifier::Set(value));
                 false
-            });
+            },
+        );
     }
 
     pub fn get(&mut self, index: usize) -> Option<isize> {
@@ -46,12 +62,37 @@ impl RangeNumMap {
         self.0.get_elem(result).and_then(|x| x.value)
     }
 
+    pub fn iter(&mut self) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
+        let mut index = 0;
+        self.0.iter_with_buffer_unloaded().filter_map(move |elem| {
+            let len = elem.len;
+            let value = elem.value?;
+            let range = index..index + len;
+            index += len;
+            Some((range, value))
+        })
+    }
+
+    pub fn drain(
+        &mut self,
+        range: Range<usize>,
+    ) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
+        let mut index = 0;
+        self.0.drain::<LengthFinder>(range).filter_map(move |elem| {
+            let len = elem.len;
+            let value = elem.value?;
+            let range = index..index + len;
+            index += len;
+            Some((range, value))
+        })
+    }
+
     pub fn len(&self) -> usize {
         *self.0.root_cache()
     }
 }
 
-fn set_value(slice: generic_btree::MutElemArrSlice<Elem>, value: isize) -> bool {
+fn set_value(slice: &mut MutElemArrSlice<Elem>, value: isize) -> bool {
     let mut len = 0;
     match (slice.start, slice.end) {
         (Some((start_index, start_offset)), Some((end_index, end_offset)))
@@ -86,7 +127,7 @@ fn set_value(slice: generic_btree::MutElemArrSlice<Elem>, value: isize) -> bool 
                         },
                     );
                 }
-            } else {
+            } else if end_offset < slice.elements[start_index].len {
                 slice.elements[start_index].len -= len;
                 slice.elements.insert(
                     start_index,
@@ -95,24 +136,35 @@ fn set_value(slice: generic_btree::MutElemArrSlice<Elem>, value: isize) -> bool 
                         len,
                     },
                 );
+            } else {
+                slice.elements[start_index].value = Some(value);
             }
+
             return false;
         }
         _ => {}
     };
     let drain_start = match slice.start {
         Some((start_index, start_offset)) => {
-            len += slice.elements[start_index].len - start_offset;
-            slice.elements[start_index].len = start_offset;
-            start_index + 1
+            if start_offset == 0 {
+                start_index
+            } else {
+                len += slice.elements[start_index].len - start_offset;
+                slice.elements[start_index].len = start_offset;
+                start_index + 1
+            }
         }
         None => 0,
     };
     let drain_end = match slice.end {
         Some((end_index, end_offset)) if end_index < slice.elements.len() => {
-            len += end_offset;
-            slice.elements[end_index].len -= end_offset;
-            end_index
+            if end_offset == slice.elements[end_index].len {
+                end_index + 1
+            } else {
+                len += end_offset;
+                slice.elements[end_index].len -= end_offset;
+                end_index
+            }
         }
         _ => slice.elements.len(),
     };

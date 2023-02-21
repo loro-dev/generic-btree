@@ -591,6 +591,8 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// F should returns true if the cache need to be updated
     ///
+    /// This method may break the balance of the tree
+    ///
     /// TODO: need better test coverage
     pub fn update<F>(&mut self, range: Range<QueryResult>, f: &mut F)
     where
@@ -632,6 +634,8 @@ impl<B: BTreeTrait> BTree<B> {
     /// F and G should returns true if the cache need to be updated
     ///
     /// Update is not in the order of the elements
+    ///
+    /// This method may break the balance of the tree
     pub fn update_with_buffer<F, G>(&mut self, range: Range<QueryResult>, f: &mut F, mut g: G)
     where
         F: FnMut(MutElemArrSlice<'_, B::Elem>) -> bool,
@@ -724,26 +728,56 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
+    /// Perf: can use dirty mark to speed this up. But it requires a new field in node
+    ///
+    /// Alternatively, we can reduce the usage of this method
+    fn recursive_unload_buffer(&mut self, parent_idx: ArenaIndex) {
+        let parent = self.nodes.get_mut(parent_idx).unwrap();
+        if parent.is_leaf() {
+            return;
+        }
+
+        let mut children = core::mem::take(&mut parent.children);
+        for (i, child) in children.iter_mut().enumerate() {
+            if let Some(buffer) = core::mem::take(&mut child.write_buffer) {
+                self.apply_child_buffer(
+                    buffer,
+                    Idx {
+                        arena: child.arena,
+                        arr: i,
+                    },
+                )
+            }
+        }
+
+        for child in children.iter() {
+            self.recursive_unload_buffer(child.arena);
+        }
+        let parent = self.nodes.get_mut(parent_idx).unwrap();
+        parent.children = children;
+    }
+
     /// Apply the write buffer all the way down the path
     fn unbuffer_path(&mut self, path: PathRef) {
         // root cannot have write buffer
         for i in 0..path.len() - 1 {
             let parent = path[i];
             let child_idx = path[i + 1];
-            let (parent, child) = self.nodes.get2_mut(parent.arena, child_idx.arena);
-            let parent = parent.unwrap();
-            if parent.children[child_idx.arr].write_buffer.is_some() {
-                let child = child.unwrap();
-                if let Some(write_buffer) =
-                    core::mem::take(&mut parent.children[child_idx.arr].write_buffer)
-                {
-                    if child.is_internal() {
-                        B::apply_write_buffer_to_nodes(&mut child.children, &write_buffer)
-                    } else {
-                        B::apply_write_buffer_to_elements(&mut child.elements, &write_buffer)
-                    }
-                }
+            let parent = self.get_mut(parent.arena);
+            if let Some(buffer) = core::mem::take(&mut parent.children[child_idx.arr].write_buffer)
+            {
+                self.apply_child_buffer(buffer, child_idx);
             }
+        }
+    }
+
+    fn apply_child_buffer(&mut self, write_buffer: B::WriteBuffer, child_idx: Idx) {
+        let child = self.nodes.get_mut(child_idx.arena);
+        let child = child.unwrap();
+        if child.is_internal() {
+            B::apply_write_buffer_to_nodes(&mut child.children, &write_buffer)
+        } else {
+            B::apply_write_buffer_to_elements(&mut child.elements, &write_buffer)
         }
     }
 
@@ -785,6 +819,11 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         self.root_cache = self.nodes.get(self.root).unwrap().calc_cache();
+    }
+
+    pub fn iter_with_buffer_unloaded(&mut self) -> impl Iterator<Item = &B::Elem> + '_ {
+        self.recursive_unload_buffer(self.root);
+        self.iter()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &B::Elem> + '_ {
@@ -836,6 +875,15 @@ impl<B: BTreeTrait> BTree<B> {
         Q: Query<B>,
     {
         self.query::<Q>(&range.start)..self.query::<Q>(&range.end)
+    }
+
+    /// TODO: performance can be optimized by only unloading the related buffer
+    pub fn iter_range_with_buffer_unloaded(
+        &mut self,
+        range: Range<QueryResult>,
+    ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
+        self.recursive_unload_buffer(self.root);
+        self.iter_range(range)
     }
 
     pub fn iter_range(
@@ -1172,7 +1220,7 @@ fn add_path_to_dirty_map(path: &[Idx], dirty_map: &mut DirtyMap) {
 
 impl<B: BTreeTrait> BTree<B> {
     #[allow(unused)]
-    fn check(&self) {
+    pub fn check(&self) {
         // check cache
         for (index, node) in self.nodes.iter() {
             if node.is_internal() {
