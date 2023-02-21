@@ -264,7 +264,7 @@ impl QueryResult {
     ) -> Option<&'b Elem> {
         tree.nodes
             .get(self.path_ref().this().arena)
-            .map(|x| &x.elements[self.elem_index])
+            .and_then(|x| x.elements.get(self.elem_index))
     }
 }
 
@@ -626,6 +626,8 @@ impl<B: BTreeTrait> BTree<B> {
 
         if !dirty_map.is_empty() {
             self.update_dirty_map(dirty_map);
+        } else {
+            self.root_cache = self.nodes.get(self.root).unwrap().calc_cache();
         }
     }
 
@@ -691,6 +693,8 @@ impl<B: BTreeTrait> BTree<B> {
 
         if !dirty_map.is_empty() {
             self.update_dirty_map(dirty_map);
+        } else {
+            self.root_cache = self.nodes.get(self.root).unwrap().calc_cache();
         }
     }
 
