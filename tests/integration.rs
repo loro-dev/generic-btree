@@ -73,4 +73,22 @@ mod test_range_num_map {
             }
         }
     }
+
+    #[test]
+    fn range_plus() {
+        let mut range_map = RangeNumMap::new();
+        for i in 0..100 {
+            range_map.insert(i..i + 1, i as isize);
+        }
+
+        range_map.plus(50..110, 100);
+        for (r, value) in range_map.iter() {
+            assert!(r.start < 100);
+            if r.start < 50 {
+                assert_eq!(value, r.start as isize);
+            } else {
+                assert_eq!(value, r.start as isize + 100);
+            }
+        }
+    }
 }

@@ -1,6 +1,6 @@
 use core::ops::RangeBounds;
 
-use crate::{HeapVec, QueryResult, SmallElemVec};
+use crate::{HeapVec, MutElemArrSlice, QueryResult, SmallElemVec};
 
 pub trait Sliceable<T = usize>: HasLength<T> {
     #[must_use]
@@ -12,6 +12,11 @@ pub trait Sliceable<T = usize>: HasLength<T> {
     {
         *self = self.slice(range);
     }
+}
+
+pub trait Mergeable {
+    fn can_merge(&self, rhs: &Self) -> bool;
+    fn merge_right(&mut self, rhs: &Self);
 }
 
 pub fn delete_range_in_elements<T: Sliceable>(
@@ -81,6 +86,99 @@ pub fn delete_range_in_elements<T: Sliceable>(
         }
     };
     ans
+}
+
+/// F returns whether should update cache
+pub fn update_slice<T: Sliceable, F>(slice: &mut MutElemArrSlice<T>, f: &mut F) -> bool
+where
+    F: FnMut(&mut T) -> bool,
+{
+    let mut should_update = false;
+    match (slice.start, slice.end) {
+        (Some((start_index, start_offset)), Some((end_index, end_offset)))
+            if start_index == end_index =>
+        {
+            if start_offset > 0 {
+                if end_offset < slice.elements[start_index].rle_len() {
+                    let mut elem = slice.elements[start_index].slice(start_offset..end_offset);
+                    should_update = should_update || f(&mut elem);
+                    let right = slice.elements[start_index].slice(end_offset..);
+                    slice.elements[start_index].slice_(..start_offset);
+                    slice.elements.insert_many(start_index + 1, [elem, right]);
+                } else {
+                    let mut elem = slice.elements[start_index].slice(start_offset..end_offset);
+                    should_update = should_update || f(&mut elem);
+                    slice.elements[start_index].slice_(..start_offset);
+                    slice.elements.insert(start_index + 1, elem);
+                }
+            } else if end_offset < slice.elements[start_index].rle_len() {
+                let mut elem = slice.elements[start_index].slice(..end_offset);
+                should_update = should_update || f(&mut elem);
+                slice.elements[start_index].slice_(end_offset..);
+                slice.elements.insert(start_index, elem);
+            } else {
+                should_update = should_update || f(&mut slice.elements[start_index]);
+            }
+
+            return should_update;
+        }
+        _ => {}
+    };
+
+    let mut shift = 0;
+    let start = match slice.start {
+        Some((start_index, start_offset)) => {
+            if start_offset == 0 {
+                start_index
+            } else {
+                let elem = slice.elements[start_index].slice(start_offset..);
+                slice.elements[start_index].slice_(..start_offset);
+                slice.elements.insert(start_index + 1, elem);
+                shift = 1;
+                start_index + 1
+            }
+        }
+        None => 0,
+    };
+    let end = match slice.end {
+        Some((end_index, end_offset)) if end_index < slice.elements.len() => {
+            let origin = &mut slice.elements[end_index + shift];
+            if end_offset == origin.rle_len() {
+                end_index + 1 + shift
+            } else {
+                let elem = origin.slice(..end_offset);
+                origin.slice_(end_offset..);
+                slice.elements.insert(end_index + shift, elem);
+                shift += 1;
+                end_index + shift
+            }
+        }
+        _ => slice.elements.len(),
+    };
+
+    slice.elements[start..end].iter_mut().any(f)
+}
+
+pub fn scan_and_merge<T: Mergeable>(elements: &mut HeapVec<T>, start: usize) {
+    if start + 1 >= elements.len() {
+        return;
+    }
+
+    let (left, right) = elements.split_at_mut(start + 1);
+    let start_elem = left.last_mut().unwrap();
+    let mut i = 0;
+    while i < right.len() {
+        if start_elem.can_merge(&right[i]) {
+            start_elem.merge_right(&right[i]);
+        } else {
+            break;
+        }
+        i += 1;
+    }
+
+    if i > 0 {
+        elements.drain(start + 1..start + 1 + i);
+    }
 }
 
 pub trait HasLength<T = usize> {

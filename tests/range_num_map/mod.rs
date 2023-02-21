@@ -1,8 +1,10 @@
 use std::{ops::Range, usize};
 
 use generic_btree::{
-    rle::{delete_range_in_elements, HasLength, Sliceable},
-    BTree, BTreeTrait, LengthFinder, MutElemArrSlice, UseLengthFinder,
+    rle::{
+        delete_range_in_elements, scan_and_merge, update_slice, HasLength, Mergeable, Sliceable,
+    },
+    BTree, BTreeTrait, LengthFinder, UseLengthFinder,
 };
 
 /// This struct keep the mapping of ranges to numbers
@@ -27,16 +29,7 @@ impl RangeNumMap {
     }
 
     pub fn insert(&mut self, range: Range<usize>, value: isize) {
-        if self.len() < range.end {
-            self.0.insert::<LengthFinder>(
-                &range.end,
-                Elem {
-                    value: None,
-                    len: range.end - self.len() + 10,
-                },
-            );
-        }
-
+        self.reserve_range(&range);
         let range = self.0.range::<LengthFinder>(range);
         self.0.update_with_buffer(
             range,
@@ -46,7 +39,11 @@ impl RangeNumMap {
                 } else {
                     0
                 };
-                let ans = set_value(&mut slice, value);
+                let ans = update_slice::<Elem, _>(&mut slice, &mut |x| {
+                    x.value = Some(value);
+                    false
+                });
+                scan_and_merge(slice.elements, slice.start.map(|x| x.0).unwrap_or(0));
                 if cfg!(debug_assert) {
                     let after_len = slice.elements.iter().map(|x| x.len).sum();
                     assert_eq!(before_len, after_len);
@@ -76,6 +73,49 @@ impl RangeNumMap {
         })
     }
 
+    pub fn plus(&mut self, range: Range<usize>, change: isize) {
+        self.reserve_range(&range);
+        let range = self.0.range::<LengthFinder>(range);
+        self.0.update_with_buffer(
+            range,
+            &mut |mut slice| {
+                let before_len = if cfg!(debug_assert) {
+                    slice.elements.iter().map(|x| x.len).sum()
+                } else {
+                    0
+                };
+                let ans = update_slice::<Elem, _>(&mut slice, &mut |x| {
+                    if let Some(v) = &mut x.value {
+                        *v += change;
+                    }
+                    false
+                });
+                scan_and_merge(slice.elements, slice.start.map(|x| x.0).unwrap_or(0));
+                if cfg!(debug_assert) {
+                    let after_len = slice.elements.iter().map(|x| x.len).sum();
+                    assert_eq!(before_len, after_len);
+                }
+                ans
+            },
+            |buffer, _| {
+                *buffer = Some(Modifier::Add(change));
+                false
+            },
+        );
+    }
+
+    fn reserve_range(&mut self, range: &Range<usize>) {
+        if self.len() < range.end {
+            self.0.insert::<LengthFinder>(
+                &range.end,
+                Elem {
+                    value: None,
+                    len: range.end - self.len() + 10,
+                },
+            );
+        }
+    }
+
     pub fn drain(
         &mut self,
         range: Range<usize>,
@@ -93,98 +133,6 @@ impl RangeNumMap {
     pub fn len(&self) -> usize {
         *self.0.root_cache()
     }
-}
-
-fn set_value(slice: &mut MutElemArrSlice<Elem>, value: isize) -> bool {
-    let mut len = 0;
-    match (slice.start, slice.end) {
-        (Some((start_index, start_offset)), Some((end_index, end_offset)))
-            if start_index == end_index =>
-        {
-            len = end_offset - start_offset;
-            if start_offset > 0 {
-                if end_offset < slice.elements[start_index].len {
-                    let right_len = slice.elements[start_index].len - end_offset;
-                    let old_value = slice.elements[start_index].value;
-                    slice.elements[start_index].len = start_offset;
-                    slice.elements.insert_many(
-                        start_index + 1,
-                        [
-                            Elem {
-                                value: Some(value),
-                                len,
-                            },
-                            Elem {
-                                value: old_value,
-                                len: right_len,
-                            },
-                        ],
-                    );
-                } else {
-                    slice.elements[start_index].len = start_offset;
-                    slice.elements.insert(
-                        start_index + 1,
-                        Elem {
-                            value: Some(value),
-                            len,
-                        },
-                    );
-                }
-            } else if end_offset < slice.elements[start_index].len {
-                slice.elements[start_index].len -= len;
-                slice.elements.insert(
-                    start_index,
-                    Elem {
-                        value: Some(value),
-                        len,
-                    },
-                );
-            } else {
-                slice.elements[start_index].value = Some(value);
-            }
-
-            return false;
-        }
-        _ => {}
-    };
-    let drain_start = match slice.start {
-        Some((start_index, start_offset)) => {
-            if start_offset == 0 {
-                start_index
-            } else {
-                len += slice.elements[start_index].len - start_offset;
-                slice.elements[start_index].len = start_offset;
-                start_index + 1
-            }
-        }
-        None => 0,
-    };
-    let drain_end = match slice.end {
-        Some((end_index, end_offset)) if end_index < slice.elements.len() => {
-            if end_offset == slice.elements[end_index].len {
-                end_index + 1
-            } else {
-                len += end_offset;
-                slice.elements[end_index].len -= end_offset;
-                end_index
-            }
-        }
-        _ => slice.elements.len(),
-    };
-    len += slice
-        .elements
-        .drain(drain_start..drain_end)
-        .map(|x| x.len)
-        .sum::<usize>();
-    slice.elements.insert(
-        drain_start,
-        Elem {
-            value: Some(value),
-            len,
-        },
-    );
-
-    false
 }
 
 impl UseLengthFinder<RangeNumMapTrait> for RangeNumMapTrait {
@@ -218,6 +166,16 @@ impl UseLengthFinder<RangeNumMapTrait> for RangeNumMapTrait {
 impl HasLength for Elem {
     fn rle_len(&self) -> usize {
         self.len
+    }
+}
+
+impl Mergeable for Elem {
+    fn can_merge(&self, rhs: &Self) -> bool {
+        self.value == rhs.value || rhs.len == 0
+    }
+
+    fn merge_right(&mut self, rhs: &Self) {
+        self.len += rhs.len
     }
 }
 
