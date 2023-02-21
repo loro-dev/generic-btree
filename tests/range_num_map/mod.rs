@@ -1,6 +1,9 @@
 use std::{ops::Range, usize};
 
-use generic_btree::{BTree, BTreeTrait, LengthFinder, MutElemArrSlice, UseLengthFinder};
+use generic_btree::{
+    rle::{delete_range_in_elements, HasLength, Sliceable},
+    BTree, BTreeTrait, LengthFinder, MutElemArrSlice, UseLengthFinder,
+};
 
 /// This struct keep the mapping of ranges to numbers
 pub struct RangeNumMap(BTree<RangeNumMapTrait>);
@@ -77,7 +80,7 @@ impl RangeNumMap {
         &mut self,
         range: Range<usize>,
     ) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
-        let mut index = 0;
+        let mut index = range.start;
         self.0.drain::<LengthFinder>(range).filter_map(move |elem| {
             let len = elem.len;
             let value = elem.value?;
@@ -200,6 +203,56 @@ impl UseLengthFinder<RangeNumMapTrait> for RangeNumMapTrait {
         }
 
         generic_btree::FindResult::new_missing(elements.len(), left)
+    }
+
+    #[inline]
+    fn finder_delete_range(
+        elements: &mut generic_btree::HeapVec<<RangeNumMapTrait as BTreeTrait>::Elem>,
+        start: Option<generic_btree::QueryResult>,
+        end: Option<generic_btree::QueryResult>,
+    ) -> generic_btree::SmallElemVec<<RangeNumMapTrait as BTreeTrait>::Elem> {
+        delete_range_in_elements(elements, start, end)
+    }
+}
+
+impl HasLength for Elem {
+    fn rle_len(&self) -> usize {
+        self.len
+    }
+}
+
+impl Sliceable for Elem {
+    fn slice(&self, range: impl std::ops::RangeBounds<usize>) -> Self {
+        let len = match range.end_bound() {
+            std::ops::Bound::Included(x) => x + 1,
+            std::ops::Bound::Excluded(x) => *x,
+            std::ops::Bound::Unbounded => self.len,
+        } - match range.start_bound() {
+            std::ops::Bound::Included(x) => *x,
+            std::ops::Bound::Excluded(x) => x + 1,
+            std::ops::Bound::Unbounded => 0,
+        };
+        Elem {
+            value: self.value,
+            len,
+        }
+    }
+
+    fn slice_(&mut self, range: impl std::ops::RangeBounds<usize>)
+    where
+        Self: Sized,
+    {
+        let len = match range.end_bound() {
+            std::ops::Bound::Included(x) => x + 1,
+            std::ops::Bound::Excluded(x) => *x,
+            std::ops::Bound::Unbounded => self.len,
+        } - match range.start_bound() {
+            std::ops::Bound::Included(x) => *x,
+            std::ops::Bound::Excluded(x) => x + 1,
+            std::ops::Bound::Unbounded => 0,
+        };
+
+        self.len = len;
     }
 }
 

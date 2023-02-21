@@ -64,9 +64,9 @@ mod test_range_num_map {
             range_map.insert(i..i + 1, i as isize);
         }
 
-        range_map.insert(50..100, 100);
+        range_map.insert(50..80, 100);
         for (r, value) in range_map.drain(25..100) {
-            if r.start < 50 {
+            if r.start < 50 || r.start >= 80 {
                 assert_eq!(value, r.start as isize);
             } else {
                 assert_eq!(value, 100);

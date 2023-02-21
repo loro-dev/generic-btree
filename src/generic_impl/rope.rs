@@ -87,7 +87,9 @@ impl Rope {
         let start = self.tree.query::<LengthFinder>(&pos);
         let end = self.tree.query::<LengthFinder>(&(pos + new.len()));
         self.tree.update::<_>(start..end, &mut |slice| {
-            for c in slice.elements.iter_mut() {
+            let start = slice.start.map(|x| x.0).unwrap_or(0);
+            let end = slice.end.map(|x| x.0).unwrap_or(slice.elements.len());
+            for c in slice.elements[start..end].iter_mut() {
                 *c = iter.next().unwrap();
             }
             false
@@ -177,6 +179,17 @@ mod test {
         rope.insert(3, "xyz");
         rope.update_in_place(1, "kkkk");
         assert_eq!(&rope.to_string(), "1kkkkz");
+    }
+
+    #[test]
+    fn test_update_1() {
+        let mut rope = Rope::new();
+        for i in 0..100 {
+            rope.insert(i, &(i % 10).to_string());
+        }
+
+        rope.update_in_place(15, "kkkkk");
+        assert_eq!(&rope.to_string()[10..20], "01234kkkkk");
     }
 
     #[derive(Debug)]
