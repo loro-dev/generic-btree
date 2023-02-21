@@ -2,6 +2,7 @@ use smallvec::SmallVec;
 
 use crate::{BTree, BTreeTrait, Idx, Node, Path, PathRef, Query, QueryResult, StackVec};
 
+/// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
     tree: &'a BTree<B>,
     inclusive_end: QueryResult,

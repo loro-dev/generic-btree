@@ -915,7 +915,7 @@ impl<B: BTreeTrait> BTree<B> {
                             };
                         let (end_idx, end_offset) =
                             if idx.arena == end.node_path.last().unwrap().arena {
-                                (end.elem_index, Some(end.offset))
+                                (end.elem_index + 1, Some(end.offset))
                             } else {
                                 (node.elements.len(), None)
                             };
