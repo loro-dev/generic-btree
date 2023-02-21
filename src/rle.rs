@@ -168,11 +168,11 @@ pub fn scan_and_merge<T: Mergeable>(elements: &mut HeapVec<T>, start: usize) {
     let start_elem = left.last_mut().unwrap();
     let mut i = 0;
     while i < right.len() {
-        if start_elem.can_merge(&right[i]) {
-            start_elem.merge_right(&right[i]);
-        } else {
+        if !start_elem.can_merge(&right[i]) {
             break;
         }
+
+        start_elem.merge_right(&right[i]);
         i += 1;
     }
 
