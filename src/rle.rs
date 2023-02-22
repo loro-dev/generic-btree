@@ -202,7 +202,7 @@ pub fn insert_with_split<T: Sliceable + Mergeable>(
         if target.can_merge(&elem) {
             target.merge_left(&elem);
         } else {
-            elements.insert(0, elem);
+            elements.insert(index, elem);
         }
     } else if offset == elements[index].rle_len() {
         let target = elements.get_mut(index).unwrap();
