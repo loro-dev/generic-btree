@@ -48,13 +48,13 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
     type Item = B::Elem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-
         loop {
             if let Some(next_elem) = self.reversed_elements.pop() {
                 return Some(next_elem);
+            }
+
+            if self.done {
+                return None;
             }
 
             if self.end_result.node_path.last() == self.current_path.last() {
@@ -90,7 +90,6 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
                 self.reversed_elements.push(x);
             }
             self.reversed_elements.reverse();
-            // TODO: provide offset & use Q's drain method
         }
     }
 }
