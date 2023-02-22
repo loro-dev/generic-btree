@@ -1203,6 +1203,12 @@ impl<B: BTreeTrait> BTree<B> {
     pub fn root_cache(&self) -> &B::Cache {
         &self.root_cache
     }
+
+    /// This method will release the memory back to OS.
+    /// Currently, it's just `*self = Self::new()`
+    pub fn clear(&mut self) {
+        *self = Self::new();
+    }
 }
 
 fn add_path_to_dirty_map(path: &[Idx], dirty_map: &mut DirtyMap) {

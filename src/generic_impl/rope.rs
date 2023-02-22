@@ -96,6 +96,10 @@ impl Rope {
         });
     }
 
+    pub fn clear(&mut self) {
+        self.tree.clear();
+    }
+
     pub fn check(&self) {
         self.tree.check()
     }
@@ -179,6 +183,18 @@ mod test {
         rope.insert(3, "xyz");
         rope.update_in_place(1, "kkkk");
         assert_eq!(&rope.to_string(), "1kkkkz");
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut rope = Rope::new();
+        rope.insert(0, "123");
+        assert_eq!(rope.len(), 3);
+        rope.clear();
+        assert_eq!(rope.len(), 0);
+        assert_eq!(&rope.to_string(), "");
+        rope.insert(0, "kkk");
+        assert_eq!(&rope.to_string(), "kkk");
     }
 
     #[test]
