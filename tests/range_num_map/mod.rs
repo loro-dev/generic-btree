@@ -177,6 +177,10 @@ impl Mergeable for Elem {
     fn merge_right(&mut self, rhs: &Self) {
         self.len += rhs.len
     }
+
+    fn merge_left(&mut self, left: &Self) {
+        self.len += left.len;
+    }
 }
 
 impl Sliceable for Elem {

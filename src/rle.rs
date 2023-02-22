@@ -17,6 +17,7 @@ pub trait Sliceable<T = usize>: HasLength<T> {
 pub trait Mergeable {
     fn can_merge(&self, rhs: &Self) -> bool;
     fn merge_right(&mut self, rhs: &Self);
+    fn merge_left(&mut self, left: &Self);
 }
 
 pub fn delete_range_in_elements<T: Sliceable>(
@@ -182,6 +183,44 @@ pub fn scan_and_merge<T: Mergeable>(elements: &mut HeapVec<T>, start: usize) {
 
     if i > 0 {
         elements.drain(start + 1..start + 1 + i);
+    }
+}
+
+pub fn insert_with_split<T: Sliceable + Mergeable>(
+    elements: &mut HeapVec<T>,
+    index: usize,
+    offset: usize,
+    elem: T,
+) {
+    if elements.is_empty() {
+        elements.push(elem);
+        return;
+    }
+
+    if offset == 0 {
+        let target = elements.get_mut(index).unwrap();
+        if target.can_merge(&elem) {
+            target.merge_left(&elem);
+        } else {
+            elements.insert(0, elem);
+        }
+    } else if offset == elements[index].rle_len() {
+        let target = elements.get_mut(index).unwrap();
+        if target.can_merge(&elem) {
+            target.merge_right(&elem);
+        } else {
+            elements.insert(index + 1, elem);
+        }
+    } else {
+        let right = elements[index].slice(offset..);
+        elements[index].slice_(..offset);
+        let left = elements.get_mut(index).unwrap();
+        if left.can_merge(&elem) {
+            left.merge_right(&elem);
+            elements.insert(index, right);
+        } else {
+            elements.insert_many(index, [elem, right]);
+        }
     }
 }
 
