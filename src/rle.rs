@@ -156,7 +156,11 @@ where
         _ => slice.elements.len(),
     };
 
-    slice.elements[start..end].iter_mut().any(f)
+    let mut ans = false;
+    for elem in slice.elements[start..end].iter_mut() {
+        ans = f(elem) || ans;
+    }
+    ans
 }
 
 pub fn scan_and_merge<T: Mergeable>(elements: &mut HeapVec<T>, start: usize) {
