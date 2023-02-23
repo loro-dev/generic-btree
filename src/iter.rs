@@ -264,7 +264,7 @@ impl<'a, B: BTreeTrait> Iter<'a, B> {
 }
 
 impl<'a, B: BTreeTrait> Iterator for Iter<'a, B> {
-    type Item = (Idx, &'a Node<B>);
+    type Item = (Path, &'a Node<B>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -276,11 +276,12 @@ impl<'a, B: BTreeTrait> Iterator for Iter<'a, B> {
         }
 
         let last = *self.path.last().unwrap();
+        let path = self.path.clone();
         if !self.tree.next_sibling(&mut self.path) {
             self.done = true;
         }
 
         let node = self.tree.get(last.arena);
-        Some((last, node))
+        Some((path, node))
     }
 }

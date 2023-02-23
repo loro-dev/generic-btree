@@ -47,7 +47,7 @@ impl Rope {
     pub fn insert(&mut self, index: usize, elem: &str) {
         let result = self.tree.query::<LengthFinder>(&index);
         self.tree
-            .batch_insert_by_query_result(result, elem.chars().collect::<SmallVec<[char; 16]>>());
+            .batch_insert_by_query_result(&result, elem.chars().collect::<SmallVec<[char; 16]>>());
     }
 
     pub fn delete_range(&mut self, range: impl RangeBounds<usize>) {
@@ -86,7 +86,7 @@ impl Rope {
         let mut iter = new.chars();
         let start = self.tree.query::<LengthFinder>(&pos);
         let end = self.tree.query::<LengthFinder>(&(pos + new.len()));
-        self.tree.update::<_>(start..end, &mut |slice| {
+        self.tree.update::<_>(&start..&end, &mut |slice| {
             let start = slice.start.map(|x| x.0).unwrap_or(0);
             let end = slice.end.map(|x| x.0).unwrap_or(slice.elements.len());
             for c in slice.elements[start..end].iter_mut() {

@@ -173,6 +173,7 @@ impl Idx {
     }
 }
 
+// TODO: can be replaced by a immutable structure?
 type Path = SmallVec<[Idx; 8]>;
 
 struct PathRef<'a>(&'a [Idx]);
@@ -248,9 +249,16 @@ pub struct MutElemArrSlice<'a, Elem> {
 /// - `end` is Some(end_offset) when it's last element of the given range.
 #[derive(Debug)]
 pub struct ElemSlice<'a, Elem> {
+    path: QueryResult,
     pub elem: &'a Elem,
     pub start: Option<usize>,
     pub end: Option<usize>,
+}
+
+impl<'a, Elem> ElemSlice<'a, Elem> {
+    pub fn path(&self) -> &QueryResult {
+        &self.path
+    }
 }
 
 impl QueryResult {
@@ -453,15 +461,11 @@ impl<B: BTreeTrait> BTree<B> {
         self.insert_by_query_result(result, data)
     }
 
+    /// It will invoke [`BTreeTrait::insert`]
     pub fn insert_by_query_result(&mut self, result: QueryResult, data: B::Elem) {
         let index = *result.node_path.last().unwrap();
         let node = self.nodes.get_mut(index.arena).unwrap();
-        if result.found {
-            B::insert(&mut node.elements, result.elem_index, result.offset, data);
-        } else {
-            node.elements.insert(result.elem_index, data);
-        }
-
+        B::insert(&mut node.elements, result.elem_index, result.offset, data);
         let is_full = node.is_full();
         self.recursive_update_cache(result.path_ref());
         if is_full {
@@ -469,9 +473,34 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
+    /// Insert many elements into the tree at once
+    ///
+    /// It will invoke [`BTreeTrait::insert_batch`]
+    ///
+    /// NOTE: Currently this method don't guarantee after inserting many elements the tree is
+    /// still balance
+    pub fn insert_many_by_query_result(
+        &mut self,
+        result: &QueryResult,
+        data: impl IntoIterator<Item = B::Elem>,
+    ) where
+        B::Elem: Clone,
+    {
+        let index = *result.node_path.last().unwrap();
+        let node = self.nodes.get_mut(index.arena).unwrap();
+        B::insert_batch(&mut node.elements, result.elem_index, result.offset, data);
+
+        let is_full = node.is_full();
+        self.recursive_update_cache(result.path_ref());
+        if is_full {
+            self.split(result.path_ref());
+        }
+        // TODO: tree may still be unbalanced
+    }
+
     pub fn batch_insert_by_query_result(
         &mut self,
-        result: QueryResult,
+        result: &QueryResult,
         data: impl IntoIterator<Item = B::Elem>,
     ) where
         B::Elem: Clone,
@@ -593,8 +622,11 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// This method may break the balance of the tree
     ///
+    /// If the given range has zero length, f will still be called, and the slice will
+    /// have same `start` and `end` field
+    ///
     /// TODO: need better test coverage
-    pub fn update<F>(&mut self, range: Range<QueryResult>, f: &mut F)
+    pub fn update<F>(&mut self, range: Range<&QueryResult>, f: &mut F)
     where
         F: FnMut(MutElemArrSlice<'_, B::Elem>) -> bool,
     {
@@ -608,7 +640,7 @@ impl<B: BTreeTrait> BTree<B> {
 
         loop {
             let current_leaf = path.last().unwrap();
-            let slice = self.get_slice(&path, start_leaf, &start, end_leaf, &end);
+            let slice = self.get_slice(&path, start_leaf, start, end_leaf, end);
             let should_update_cache = f(slice);
             if should_update_cache {
                 // TODO: TEST THIS
@@ -906,7 +938,8 @@ impl<B: BTreeTrait> BTree<B> {
                 }
             } else {
                 match node_iter.next() {
-                    Some((idx, node)) => {
+                    Some((path, node)) => {
+                        let idx = path.last().unwrap();
                         let (start_idx, start_offset) =
                             if idx.arena == start.node_path.last().unwrap().arena {
                                 (start.elem_index, Some(start.offset))
@@ -915,13 +948,22 @@ impl<B: BTreeTrait> BTree<B> {
                             };
                         let (end_idx, end_offset) =
                             if idx.arena == end.node_path.last().unwrap().arena {
-                                (end.elem_index + 1, Some(end.offset))
+                                (
+                                    (end.elem_index + 1).min(node.elements.len()),
+                                    Some(end.offset),
+                                )
                             } else {
                                 (node.elements.len(), None)
                             };
 
                         elem_iter = Some(node.elements[start_idx..end_idx].iter().enumerate().map(
                             move |(i, x)| ElemSlice {
+                                path: QueryResult {
+                                    node_path: path.clone(),
+                                    elem_index: i + start_idx,
+                                    offset: if i == 0 { start_offset.unwrap_or(0) } else { 0 },
+                                    found: true,
+                                },
                                 elem: x,
                                 start: if i == 0 { start_offset } else { None },
                                 end: if i == end_idx - start_idx - 1 {
