@@ -197,6 +197,19 @@ pub fn insert_with_split<T: Sliceable + Mergeable>(
         return;
     }
 
+    if index == elements.len() {
+        debug_assert_eq!(offset, 0);
+        let last = elements.last_mut().unwrap();
+        if last.can_merge(&elem) {
+            last.merge_right(&elem);
+        } else {
+            elements.push(elem);
+        }
+
+        return;
+    }
+
+    assert!(index < elements.len());
     if offset == 0 {
         let target = elements.get_mut(index).unwrap();
         if target.can_merge(&elem) {
