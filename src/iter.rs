@@ -138,12 +138,12 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
 impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
     fn drop(&mut self) {
         self.ensure_trim_start_and_end();
-        // leaf nodes can be removed only when their elements are empty
         let start_path = &self.start_result.node_path;
         let end_path = &self.end_result.node_path;
         let mut level = start_path.len() - 1;
         let mut deleted: SmallVec<[_; 32]> = SmallVec::new();
-        let mut new_path: SmallVec<[_; 16]> = SmallVec::with_capacity(start_path.len());
+        let mut prev_path_of_start_path: SmallVec<[_; 16]> =
+            SmallVec::with_capacity(start_path.len());
         while start_path[level].arena != end_path[level].arena {
             let start_node = self.tree.get(start_path[level].arena);
             let end_node = self.tree.get(end_path[level].arena);
@@ -157,14 +157,29 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             } else {
                 end_path[level].arr
             };
-            new_path.push(del_start.max(1) - 1);
             if start_path[level - 1].arena == end_path[level - 1].arena {
                 // parent is the same, delete start..end
                 let parent = self.tree.get_mut(start_path[level - 1].arena);
+                if del_start == 0 && del_end == parent.children.len() {
+                    // if we are deleting the whole node, we need to delete the parent as well
+                    // so the path index at this level would be the last child of the parent
+                    prev_path_of_start_path.push(None);
+                } else {
+                    prev_path_of_start_path.push(Some(del_start.max(1) - 1));
+                }
+
                 for x in parent.children.drain(del_start..del_end) {
                     deleted.push(x.arena);
                 }
             } else {
+                if del_start == 0 {
+                    // if we are deleting the whole node, we need to delete the parent as well
+                    // so the path index at this level would be the last child of the parent
+                    prev_path_of_start_path.push(None);
+                } else {
+                    prev_path_of_start_path.push(Some(del_start - 1));
+                }
+
                 // parent is different
                 {
                     // delete start..
@@ -191,17 +206,19 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             self.tree.purge(x);
         }
 
-        // update cache
         loop {
-            new_path.push(start_path[level].arr);
+            prev_path_of_start_path.push(Some(start_path[level].arr));
             if level == 0 {
                 break;
             }
             level -= 1;
         }
 
-        new_path.reverse(); // now in root to leaf order
-        if let Some(path) = self.tree.try_get_path_from_indexes(&new_path) {
+        prev_path_of_start_path.reverse(); // now in root to leaf order
+        if let Some(path) = self
+            .tree
+            .try_get_path_from_indexes(&prev_path_of_start_path)
+        {
             // otherwise the path is invalid (e.g. the tree is empty)
             seal(self.tree, path);
         }
@@ -209,6 +226,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
 }
 
 fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: Path) {
+    // update cache
     let mut sibling_path = path.clone();
     let same = !tree.next_sibling(&mut sibling_path);
     tree.recursive_update_cache(path.as_ref().into());

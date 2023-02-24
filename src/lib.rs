@@ -18,7 +18,6 @@
 //!
 
 #![forbid(unsafe_code)]
-#![no_std]
 
 use core::{
     fmt::Debug,
@@ -325,6 +324,7 @@ impl<
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Child")
+            .field("index", &self.arena)
             .field("cache", &self.cache)
             .field("write_buffer", &self.write_buffer)
             .finish()
@@ -1243,14 +1243,50 @@ impl<B: BTreeTrait> BTree<B> {
         true
     }
 
-    fn try_get_path_from_indexes(&self, indexes: &[usize]) -> Option<Path> {
-        debug_assert_eq!(indexes[0], 0);
+    /// find the next sibling at the same level
+    ///
+    /// return false if there is no next sibling
+    fn prev_sibling(&self, path: &mut [Idx]) -> bool {
+        if path.len() <= 1 {
+            return false;
+        }
+
+        let depth = path.len();
+        let parent_idx = path[depth - 2];
+        let this_idx = path[depth - 1];
+        let parent = self.get(parent_idx.arena);
+        if this_idx.arr >= 1 {
+            let prev = &parent.children[this_idx.arr - 1];
+            path[depth - 1] = Idx::new(prev.arena, this_idx.arr - 1);
+        } else {
+            if !self.prev_sibling(&mut path[..depth - 1]) {
+                return false;
+            }
+
+            let parent = self.get(path[depth - 2].arena);
+            path[depth - 1] = Idx::new(
+                parent.children.last().unwrap().arena,
+                parent.children.len() - 1,
+            );
+        }
+
+        true
+    }
+
+    /// if index is None, then using the last index
+    fn try_get_path_from_indexes(&self, indexes: &[Option<usize>]) -> Option<Path> {
+        debug_assert_eq!(indexes[0], Some(0));
         let mut path = smallvec::smallvec![Idx::new(self.root, 0)];
         let mut node_idx = self.root;
         for &index in indexes[1..].iter() {
             let node = self.get(node_idx);
-            path.push(Idx::new(node.children.get(index)?.arena, index));
-            node_idx = node.children[index].arena;
+
+            let i = match index {
+                Some(index) => index,
+                None => node.children.len() - 1,
+            };
+            path.push(Idx::new(node.children.get(i)?.arena, i));
+            node_idx = node.children[i].arena;
         }
         Some(path)
     }
