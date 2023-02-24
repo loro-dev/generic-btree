@@ -89,35 +89,43 @@ pub fn delete_range_in_elements<T: Sliceable>(
     ans
 }
 
-/// F returns whether should update cache
+/// Update the given sliced elements by f. If f returns true, the cache should be updated.
+///
+/// This method will split the elements if necessary.
 pub fn update_slice<T: Sliceable, F>(slice: &mut MutElemArrSlice<T>, f: &mut F) -> bool
 where
     F: FnMut(&mut T) -> bool,
 {
     let mut should_update = false;
+
+    // if the start and end are in the same element
     match (slice.start, slice.end) {
         (Some((start_index, start_offset)), Some((end_index, end_offset)))
             if start_index == end_index =>
         {
             if start_offset > 0 {
                 if end_offset < slice.elements[start_index].rle_len() {
+                    // need to insert two new elements, because the range is in the middle of the element
                     let mut elem = slice.elements[start_index].slice(start_offset..end_offset);
                     should_update = should_update || f(&mut elem);
                     let right = slice.elements[start_index].slice(end_offset..);
                     slice.elements[start_index].slice_(..start_offset);
                     slice.elements.insert_many(start_index + 1, [elem, right]);
                 } else {
+                    // slice the elem into two part: ( ..start ), ( start.. )
                     let mut elem = slice.elements[start_index].slice(start_offset..end_offset);
                     should_update = should_update || f(&mut elem);
                     slice.elements[start_index].slice_(..start_offset);
                     slice.elements.insert(start_index + 1, elem);
                 }
             } else if end_offset < slice.elements[start_index].rle_len() {
+                // slice the elem into two part: ( ..end ), ( end.. )
                 let mut elem = slice.elements[start_index].slice(..end_offset);
                 should_update = should_update || f(&mut elem);
                 slice.elements[start_index].slice_(end_offset..);
                 slice.elements.insert(start_index, elem);
             } else {
+                // no need to slice, update directly
                 should_update = should_update || f(&mut slice.elements[start_index]);
             }
 
@@ -129,8 +137,13 @@ where
     let mut shift = 0;
     let start = match slice.start {
         Some((start_index, start_offset)) => {
-            if start_offset == 0 {
+            if start_offset == 0
+                || start_index == slice.elements.len()
+                || slice.elements[start_index].rle_len() == 0
+            {
                 start_index
+            } else if start_offset == slice.elements[start_index].rle_len() {
+                start_index + 1
             } else {
                 let elem = slice.elements[start_index].slice(start_offset..);
                 slice.elements[start_index].slice_(..start_offset);
@@ -142,10 +155,12 @@ where
         None => 0,
     };
     let end = match slice.end {
-        Some((end_index, end_offset)) if end_index < slice.elements.len() => {
+        Some((end_index, end_offset)) if end_index + shift < slice.elements.len() => {
             let origin = &mut slice.elements[end_index + shift];
-            if end_offset == origin.rle_len() {
+            if end_offset == origin.rle_len() || origin.rle_len() == 0 {
                 end_index + 1 + shift
+            } else if end_offset == 0 {
+                end_index + shift
             } else {
                 let elem = origin.slice(..end_offset);
                 origin.slice_(end_offset..);

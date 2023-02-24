@@ -30,7 +30,6 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
         start_result: QueryResult,
         end_result: QueryResult,
     ) -> Self {
-        tree.flush_path((&start_result.node_path).into());
         Self {
             tree,
             done: false,
@@ -66,7 +65,6 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
                 self.done = true;
             }
 
-            self.tree.flush_path((&self.current_path).into());
             let node = self.tree.get_mut(idx.arena);
             let start = if idx.arena == self.start_result.node_path.last().unwrap().arena {
                 Some(self.start_result.clone())

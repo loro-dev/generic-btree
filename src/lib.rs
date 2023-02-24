@@ -615,6 +615,7 @@ impl<B: BTreeTrait> BTree<B> {
     where
         Q: Query<B>,
     {
+        self.flush_write_buffer();
         let from = self.query::<Q>(&range.start);
         let to = self.query::<Q>(&range.end);
         iter::Drain::new(self, range.start, range.end, from, to)
