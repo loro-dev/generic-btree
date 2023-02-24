@@ -142,8 +142,9 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         let end_path = &self.end_result.node_path;
         let mut level = start_path.len() - 1;
         let mut deleted: SmallVec<[_; 32]> = SmallVec::new();
-        let mut prev_path_of_start_path: SmallVec<[_; 16]> =
-            SmallVec::with_capacity(start_path.len());
+        let mut zipper_left: SmallVec<[_; 16]> = SmallVec::with_capacity(start_path.len());
+        let mut zipper_right: SmallVec<[_; 16]> = SmallVec::with_capacity(start_path.len());
+        // TODO: formalize zipper left and zipper right and document it
         while start_path[level].arena != end_path[level].arena {
             let start_node = self.tree.get(start_path[level].arena);
             let end_node = self.tree.get(end_path[level].arena);
@@ -160,24 +161,26 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             if start_path[level - 1].arena == end_path[level - 1].arena {
                 // parent is the same, delete start..end
                 let parent = self.tree.get_mut(start_path[level - 1].arena);
+                zipper_right.push(Some(del_start));
                 if del_start == 0 && del_end == parent.children.len() {
                     // if we are deleting the whole node, we need to delete the parent as well
                     // so the path index at this level would be the last child of the parent
-                    prev_path_of_start_path.push(None);
+                    zipper_left.push(None);
                 } else {
-                    prev_path_of_start_path.push(Some(del_start.max(1) - 1));
+                    zipper_left.push(Some(del_start.max(1) - 1));
                 }
 
                 for x in parent.children.drain(del_start..del_end) {
                     deleted.push(x.arena);
                 }
             } else {
+                zipper_right.push(Some(0));
                 if del_start == 0 {
                     // if we are deleting the whole node, we need to delete the parent as well
                     // so the path index at this level would be the last child of the parent
-                    prev_path_of_start_path.push(None);
+                    zipper_left.push(None);
                 } else {
-                    prev_path_of_start_path.push(Some(del_start - 1));
+                    zipper_left.push(Some(del_start - 1));
                 }
 
                 // parent is different
@@ -207,18 +210,21 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         }
 
         loop {
-            prev_path_of_start_path.push(Some(start_path[level].arr));
+            zipper_left.push(Some(start_path[level].arr));
+            zipper_right.push(Some(start_path[level].arr));
             if level == 0 {
                 break;
             }
             level -= 1;
         }
 
-        prev_path_of_start_path.reverse(); // now in root to leaf order
-        if let Some(path) = self
-            .tree
-            .try_get_path_from_indexes(&prev_path_of_start_path)
-        {
+        zipper_left.reverse(); // now in root to leaf order
+        zipper_right.reverse(); // now in root to leaf order
+        if let Some(path) = self.tree.try_get_path_from_indexes(&zipper_right) {
+            self.tree.recursive_update_cache(path.as_ref().into());
+        }
+
+        if let Some(path) = self.tree.try_get_path_from_indexes(&zipper_left) {
             // otherwise the path is invalid (e.g. the tree is empty)
             seal(self.tree, path);
         }
