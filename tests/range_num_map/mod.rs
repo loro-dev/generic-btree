@@ -64,7 +64,7 @@ impl RangeNumMap {
 
     pub fn iter(&mut self) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
         let mut index = 0;
-        self.0.iter_with_buffer_unloaded().filter_map(move |elem| {
+        self.0.iter_flushed().filter_map(move |elem| {
             let len = elem.len;
             let value = elem.value?;
             let range = index..index + len;

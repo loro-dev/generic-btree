@@ -124,6 +124,8 @@ pub struct BTree<B: BTreeTrait> {
     nodes: Arena<Node<B>>,
     root: ArenaIndex,
     root_cache: B::Cache,
+    /// this field turn true when things written into write buffer
+    need_flush: bool,
 }
 
 impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
@@ -132,6 +134,7 @@ impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
             nodes: self.nodes.clone(),
             root: self.root,
             root_cache: self.root_cache.clone(),
+            need_flush: false,
         }
     }
 }
@@ -445,6 +448,7 @@ impl<B: BTreeTrait> BTree<B> {
             nodes: arena,
             root,
             root_cache: B::Cache::default(),
+            need_flush: false,
         }
     }
 
@@ -601,7 +605,7 @@ impl<B: BTreeTrait> BTree<B> {
             return None;
         }
 
-        self.unbuffer_path(PathRef::from(&q.node_path));
+        self.flush_path(PathRef::from(&q.node_path));
         let index = *q.node_path.last().unwrap();
         let node = self.nodes.get(index.arena)?;
         node.elements.get(q.elem_index)
@@ -675,6 +679,7 @@ impl<B: BTreeTrait> BTree<B> {
         F: FnMut(MutElemArrSlice<'_, B::Elem>) -> bool,
         G: FnMut(&mut Option<B::WriteBuffer>, &B::Cache) -> bool,
     {
+        self.need_flush = true;
         let start = range.start;
         let end = range.end;
         let start_leaf = start.node_path.last().unwrap();
@@ -767,7 +772,7 @@ impl<B: BTreeTrait> BTree<B> {
     /// Perf: can use dirty mark to speed this up. But it requires a new field in node
     ///
     /// Alternatively, we can reduce the usage of this method
-    fn recursive_unload_buffer(&mut self, parent_idx: ArenaIndex) {
+    fn recursive_flush_buffer(&mut self, parent_idx: ArenaIndex) {
         let parent = self.nodes.get_mut(parent_idx).unwrap();
         if parent.is_leaf() {
             return;
@@ -787,14 +792,14 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         for child in children.iter() {
-            self.recursive_unload_buffer(child.arena);
+            self.recursive_flush_buffer(child.arena);
         }
         let parent = self.nodes.get_mut(parent_idx).unwrap();
         parent.children = children;
     }
 
     /// Apply the write buffer all the way down the path
-    fn unbuffer_path(&mut self, path: PathRef) {
+    fn flush_path(&mut self, path: PathRef) {
         // root cannot have write buffer
         for i in 0..path.len() - 1 {
             let parent = path[i];
@@ -857,8 +862,15 @@ impl<B: BTreeTrait> BTree<B> {
         self.root_cache = self.nodes.get(self.root).unwrap().calc_cache();
     }
 
-    pub fn iter_with_buffer_unloaded(&mut self) -> impl Iterator<Item = &B::Elem> + '_ {
-        self.recursive_unload_buffer(self.root);
+    pub fn flush_write_buffer(&mut self) {
+        if self.need_flush {
+            self.recursive_flush_buffer(self.root);
+            self.need_flush = false;
+        }
+    }
+
+    pub fn iter_flushed(&mut self) -> impl Iterator<Item = &B::Elem> + '_ {
+        self.recursive_flush_buffer(self.root);
         self.iter()
     }
 
@@ -914,11 +926,11 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     /// TODO: performance can be optimized by only unloading the related buffer
-    pub fn iter_range_with_buffer_unloaded(
+    pub fn iter_flushed_range(
         &mut self,
         range: Range<QueryResult>,
     ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
-        self.recursive_unload_buffer(self.root);
+        self.recursive_flush_buffer(self.root);
         self.iter_range(range)
     }
 
