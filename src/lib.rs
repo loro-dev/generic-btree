@@ -31,6 +31,8 @@ use thunderdome::{Arena, Index as ArenaIndex};
 mod generic_impl;
 mod iter;
 pub use generic_impl::*;
+
+use crate::rle::HasLength;
 pub mod rle;
 pub type SmallElemVec<T> = SmallVec<[T; 8]>;
 pub type StackVec<T> = SmallVec<[T; 8]>;
@@ -239,6 +241,7 @@ pub struct QueryResult {
 ///
 /// - `start` is Some((start_index, start_offset)) when the slice is the first slice of the given range. i.e. the first element should be sliced.
 /// - `end`   is Some((end_index, end_offset))     when the slice is the last  slice of the given range. i.e. the last  element should be sliced.
+#[derive(Debug)]
 pub struct MutElemArrSlice<'a, Elem> {
     pub elements: &'a mut HeapVec<Elem>,
     pub start: Option<(usize, usize)>,
@@ -569,6 +572,47 @@ impl<B: BTreeTrait> BTree<B> {
         self.query_with_finder_return::<Q>(query).0
     }
 
+    /// Shift by offset 1.
+    ///
+    /// It will not stay on empty spans but scan forward
+    pub fn shift_path_by_one_offset(&self, path: &mut QueryResult)
+    where
+        B::Elem: rle::HasLength,
+    {
+        let mut node = self
+            .nodes
+            .get(path.node_path.last().unwrap().arena)
+            .unwrap();
+        loop {
+            if path.elem_index == node.elements.len() {
+                path.elem_index = 0;
+                path.offset = 0;
+
+                node = self
+                    .nodes
+                    .get(path.node_path.last().unwrap().arena)
+                    .unwrap();
+
+                if !self.next_sibling(&mut path.node_path) {
+                    path.elem_index = node.children.len();
+                    path.offset = 0;
+                    break;
+                }
+            }
+
+            assert!(node.is_leaf() && path.elem_index <= node.elements.len());
+            let elem = &node.elements[path.elem_index];
+            // skip empty span
+            if elem.rle_len() >= path.offset {
+                path.elem_index += 1;
+                path.offset = 0;
+            } else {
+                path.offset += 1;
+                break;
+            }
+        }
+    }
+
     pub fn query_with_finder_return<Q>(&self, query: &Q::QueryArg) -> (QueryResult, Q)
     where
         Q: Query<B>,
@@ -640,7 +684,7 @@ impl<B: BTreeTrait> BTree<B> {
         let start_leaf = start.node_path.last().unwrap();
         let mut path = start.node_path.clone();
         let end_leaf = end.node_path.last().unwrap();
-        type Level = isize; // always positive, use isize to avoid overflow
+        type Level = isize; // always positive, use isize to avoid subtract overflow
         let mut dirty_map: FxHashMap<(Level, ArenaIndex), HeapVec<Idx>> = FxHashMap::default();
 
         loop {
@@ -662,7 +706,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         if !dirty_map.is_empty() {
-            self.update_dirty_map(dirty_map);
+            self.update_dirty_cache_map(dirty_map);
         } else {
             self.root_cache = self.nodes.get(self.root).unwrap().calc_cache();
         }
@@ -730,7 +774,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         if !dirty_map.is_empty() {
-            self.update_dirty_map(dirty_map);
+            self.update_dirty_cache_map(dirty_map);
         } else {
             self.root_cache = self.nodes.get(self.root).unwrap().calc_cache();
         }
@@ -849,7 +893,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn update_dirty_map(&mut self, dirty_map: DirtyMap) {
+    fn update_dirty_cache_map(&mut self, dirty_map: DirtyMap) {
         let mut dirty_set: StackVec<((isize, ArenaIndex), _)> = dirty_map.into_iter().collect();
         dirty_set.sort_unstable_by_key(|x| -x.0 .0);
         for ((_, parent), children) in dirty_set {
