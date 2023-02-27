@@ -245,9 +245,9 @@ pub fn insert_with_split<T: Sliceable + Mergeable>(
         let left = elements.get_mut(index).unwrap();
         if left.can_merge(&elem) {
             left.merge_right(&elem);
-            elements.insert(index, right);
+            elements.insert(index + 1, right);
         } else {
-            elements.insert_many(index, [elem, right]);
+            elements.insert_many(index + 1, [elem, right]);
         }
     }
 }

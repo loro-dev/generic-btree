@@ -229,7 +229,7 @@ impl<'a> PathRef<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryResult {
     node_path: Path,
     pub elem_index: usize,
