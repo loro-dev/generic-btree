@@ -77,8 +77,14 @@ pub trait BTreeTrait {
         unimplemented!()
     }
 
-    fn calc_cache_internal(caches: &[Child<Self>]) -> Self::Cache;
-    fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache;
+    /// This method do not return new cache to avoid unnecessary heap allocation.
+    /// It should not depend on the data of `cache` because it may not be
+    /// the cache of the same element.
+    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[Child<Self>]);
+    /// This method do not return new cache to avoid unnecessary heap allocation
+    /// It should not depend on the data of `cache` because it may not be
+    /// the cache of the same element.
+    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]);
 }
 
 pub trait Query<B: BTreeTrait> {
@@ -430,12 +436,11 @@ impl<B: BTreeTrait> Node<B> {
         !self.children.is_empty()
     }
 
-    #[must_use]
-    fn calc_cache(&self) -> B::Cache {
+    fn calc_cache(&self, cache: &mut B::Cache) {
         if self.is_internal() {
-            B::calc_cache_internal(&self.children)
+            B::calc_cache_internal(cache, &self.children)
         } else {
-            B::calc_cache_leaf(&self.elements)
+            B::calc_cache_leaf(cache, &self.elements)
         }
     }
 }
@@ -708,7 +713,10 @@ impl<B: BTreeTrait> BTree<B> {
         if !dirty_map.is_empty() {
             self.update_dirty_cache_map(dirty_map);
         } else {
-            self.root_cache = self.nodes.get(self.root).unwrap().calc_cache();
+            self.nodes
+                .get(self.root)
+                .unwrap()
+                .calc_cache(&mut self.root_cache);
         }
     }
 
@@ -776,7 +784,10 @@ impl<B: BTreeTrait> BTree<B> {
         if !dirty_map.is_empty() {
             self.update_dirty_cache_map(dirty_map);
         } else {
-            self.root_cache = self.nodes.get(self.root).unwrap().calc_cache();
+            self.nodes
+                .get(self.root)
+                .unwrap()
+                .calc_cache(&mut self.root_cache);
         }
     }
 
@@ -900,11 +911,14 @@ impl<B: BTreeTrait> BTree<B> {
             for Idx { arena, arr } in children {
                 let (child, parent) = self.nodes.get2_mut(arena, parent);
                 let (child, parent) = (child.unwrap(), parent.unwrap());
-                parent.children[arr].cache = child.calc_cache();
+                child.calc_cache(&mut parent.children[arr].cache);
             }
         }
 
-        self.root_cache = self.nodes.get(self.root).unwrap().calc_cache();
+        self.nodes
+            .get(self.root)
+            .unwrap()
+            .calc_cache(&mut self.root_cache);
     }
 
     pub fn flush_write_buffer(&mut self) {
@@ -1052,7 +1066,8 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         // update cache
-        let right_cache = right.calc_cache();
+        let mut right_cache = B::Cache::default();
+        right.calc_cache(&mut right_cache);
         let right = self.nodes.insert(right);
         let this_cache = self.calc_cache(path.this().arena);
 
@@ -1096,15 +1111,19 @@ impl<B: BTreeTrait> BTree<B> {
         let left: Node<B> = core::mem::take(root);
         let right = new_node;
         let left = Child::new(self.nodes.insert(left), new_cache);
+        let mut cache = std::mem::take(&mut self.root_cache);
         let root = self.get_mut(self.root);
         root.children.push(left);
         root.children.push(right);
-        self.root_cache = root.calc_cache();
+        root.calc_cache(&mut cache);
+        self.root_cache = cache;
     }
 
     fn calc_cache(&mut self, node: ArenaIndex) -> B::Cache {
         let node = self.get_mut(node);
-        node.calc_cache()
+        let mut cache = Default::default();
+        node.calc_cache(&mut cache);
+        cache
     }
 
     #[inline(always)]
@@ -1130,6 +1149,10 @@ impl<B: BTreeTrait> BTree<B> {
 
         match self.pair_neighbor(path.parent().unwrap().arena, path.this()) {
             Some((a_idx, b_idx)) => {
+                let parent = self.get_mut(path.parent().unwrap().arena);
+                let mut a_cache = std::mem::take(&mut parent.children[a_idx.arr].cache);
+                let mut b_cache = std::mem::take(&mut parent.children[b_idx.arr].cache);
+
                 let (a, b) = self.nodes.get2_mut(a_idx.arena, b_idx.arena);
                 let a = a.unwrap();
                 let b = b.unwrap();
@@ -1154,8 +1177,8 @@ impl<B: BTreeTrait> BTree<B> {
                                 .insert_many(0, a.elements.drain(a.elements.len() - move_len..));
                         }
                     }
-                    let a_cache = a.calc_cache();
-                    let b_cache = b.calc_cache();
+                    a.calc_cache(&mut a_cache);
+                    b.calc_cache(&mut b_cache);
                     let parent = self.get_mut(path.parent().unwrap().arena);
                     parent.children[a_idx.arr].cache = a_cache;
                     parent.children[b_idx.arr].cache = b_cache;
@@ -1169,7 +1192,7 @@ impl<B: BTreeTrait> BTree<B> {
                         } else {
                             a.elements.append(&mut b.elements);
                         }
-                        let a_cache = a.calc_cache();
+                        a.calc_cache(&mut a_cache);
                         let parent = self.get_mut(path.parent().unwrap().arena);
                         parent.children[a_idx.arr].cache = a_cache;
                         parent.children.remove(b_idx.arr);
@@ -1183,7 +1206,7 @@ impl<B: BTreeTrait> BTree<B> {
                         } else {
                             b.elements.insert_many(0, core::mem::take(&mut a.elements));
                         }
-                        let b_cache = b.calc_cache();
+                        b.calc_cache(&mut b_cache);
                         let parent = self.get_mut(path.parent().unwrap().arena);
                         parent.children[b_idx.arr].cache = b_cache;
                         parent.children.remove(a_idx.arr);
@@ -1236,12 +1259,17 @@ impl<B: BTreeTrait> BTree<B> {
     fn recursive_update_cache(&mut self, path: PathRef) {
         let leaf = self.get(path.this().arena);
         assert!(leaf.is_leaf());
-        let mut child_cache = leaf.calc_cache();
+        let mut child_cache = Default::default();
+        leaf.calc_cache(&mut child_cache);
         let mut child_index = path.this().arr;
         for idx in path.parent_path().iter().rev() {
             let node = self.get_mut(idx.arena);
-            node.children[child_index].cache = child_cache;
-            child_cache = node.calc_cache();
+            let cache = std::mem::replace(
+                &mut node.children[child_index].cache,
+                std::mem::take(&mut child_cache),
+            );
+            child_cache = cache;
+            node.calc_cache(&mut child_cache);
             child_index = idx.arr;
         }
         self.root_cache = child_cache;
@@ -1371,7 +1399,9 @@ impl<B: BTreeTrait> BTree<B> {
             if node.is_internal() {
                 for child_info in node.children.iter() {
                     let child = self.get(child_info.arena);
-                    assert!(child.calc_cache() == child_info.cache);
+                    let mut cache = Default::default();
+                    child.calc_cache(&mut cache);
+                    assert!(cache == child_info.cache);
                 }
             }
 

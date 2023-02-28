@@ -232,12 +232,12 @@ impl BTreeTrait for RangeNumMapTrait {
         element.len
     }
 
-    fn calc_cache_internal(caches: &[generic_btree::Child<Self>]) -> Self::Cache {
-        caches.iter().map(|c| c.cache).sum()
+    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[generic_btree::Child<Self>]) {
+        *cache = caches.iter().map(|c| c.cache).sum()
     }
 
-    fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache {
-        elements.iter().map(|c| c.len).sum()
+    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) {
+        *cache = elements.iter().map(|c| c.len).sum()
     }
 
     fn apply_write_buffer_to_elements(

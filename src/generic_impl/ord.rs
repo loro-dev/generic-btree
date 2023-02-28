@@ -102,15 +102,15 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
         None
     }
 
-    fn calc_cache_internal(caches: &[crate::Child<Self>]) -> Self::Cache {
-        Some((
+    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[crate::Child<Self>]) {
+        *cache = Some((
             caches[0].cache.as_ref().unwrap().0.clone(),
             caches[caches.len() - 1].cache.as_ref().unwrap().1.clone(),
         ))
     }
 
-    fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache {
-        Some((
+    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) {
+        *cache = Some((
             elements[0].0.clone(),
             elements[elements.len() - 1].0.clone(),
         ))

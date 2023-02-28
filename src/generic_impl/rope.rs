@@ -133,12 +133,12 @@ impl BTreeTrait for RopeTrait {
         1
     }
 
-    fn calc_cache_internal(caches: &[crate::Child<Self>]) -> Self::Cache {
-        caches.iter().map(|x| x.cache).sum::<usize>()
+    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[crate::Child<Self>]) {
+        *cache = caches.iter().map(|x| x.cache).sum::<usize>()
     }
 
-    fn calc_cache_leaf(elements: &[Self::Elem]) -> Self::Cache {
-        elements.len()
+    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) {
+        *cache = elements.len()
     }
 
     fn insert(elements: &mut HeapVec<Self::Elem>, index: usize, _: usize, elem: Self::Elem) {
