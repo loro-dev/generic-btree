@@ -1,18 +1,18 @@
 use smallvec::SmallVec;
 
-use crate::{BTree, BTreeTrait, Idx, Node, Path, PathRef, Query, QueryResult, StackVec};
+use crate::{BTree, BTreeTrait, Idx, Node, NodePath, PathRef, Query, QueryResult, StackVec};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
     tree: &'a BTree<B>,
     inclusive_end: QueryResult,
-    path: Path,
+    path: NodePath,
     done: bool,
 }
 
 pub struct Drain<'a, B: BTreeTrait, Q: Query<B>> {
     tree: &'a mut BTree<B>,
-    current_path: Path,
+    current_path: NodePath,
     done: bool,
     start_query: Q::QueryArg,
     start_result: QueryResult,
@@ -231,7 +231,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
     }
 }
 
-fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: Path) {
+fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: NodePath) {
     // update cache
     let mut sibling_path = path.clone();
     let same = !tree.next_sibling(&mut sibling_path);
@@ -286,7 +286,7 @@ impl<'a, B: BTreeTrait> Iter<'a, B> {
 }
 
 impl<'a, B: BTreeTrait> Iterator for Iter<'a, B> {
-    type Item = (Path, &'a Node<B>);
+    type Item = (NodePath, &'a Node<B>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {

@@ -1,6 +1,8 @@
 use core::ops::RangeBounds;
 
-use crate::{HeapVec, MutElemArrSlice, QueryResult, SmallElemVec};
+use crate::{
+    BTree, BTreeTrait, HeapVec, MutElemArrSlice, NodePath, Query, QueryResult, SmallElemVec,
+};
 
 pub trait Sliceable<T = usize>: HasLength<T> {
     #[must_use]
@@ -18,6 +20,109 @@ pub trait Mergeable {
     fn can_merge(&self, rhs: &Self) -> bool;
     fn merge_right(&mut self, rhs: &Self);
     fn merge_left(&mut self, left: &Self);
+}
+
+pub trait HasLength<T = usize> {
+    fn rle_len(&self) -> T;
+}
+
+impl<T: Mergeable, B: BTreeTrait<Elem = T>> BTree<B> {
+    /// This will return the number of mergeable elements. Ideally this should be zero.
+    /// This is provided for debugging and optimization
+    pub fn get_mergeable_num(&self) -> usize {
+        let mut last: Option<&T> = None;
+        let mut num = 0;
+        for span in self.iter() {
+            match &mut last {
+                Some(last) => {
+                    num += if last.can_merge(span) { 1 } else { 0 };
+                }
+                None => last = Some(span),
+            }
+        }
+
+        num
+    }
+
+    /// Try to merge the elements at the given range.
+    /// This operation will invalidate the path if succeed.
+    pub fn try_merge_to_neighbors(&mut self, start: QueryResult, end: QueryResult) {
+        let start_leaf = start.node_path.last().unwrap();
+        let mut path = start.node_path.clone();
+        let end_leaf = end.node_path.last().unwrap();
+        type Level = isize; // always positive, use isize to avoid subtract overflow
+
+        loop {
+            let current_leaf = path.last().unwrap();
+            todo!();
+            // let slice = self.get_slice(&path, start_leaf, start, end_leaf, end);
+
+            if current_leaf == end_leaf {
+                break;
+            }
+
+            if !self.next_sibling(&mut path) {
+                break;
+            }
+        }
+    }
+
+    /// return merged
+    fn try_merge_next(&mut self, path: NodePath) -> bool {
+        let leaf_idx = path.last().unwrap();
+        let leaf = self.get(leaf_idx.arena);
+        if leaf.is_lack() {
+            self.handle_lack(&path.as_ref().into());
+            return true;
+        }
+
+        let mut sibling_path = path.clone();
+        if !self.next_sibling(&mut sibling_path) {
+            return false;
+        }
+
+        let next_idx = sibling_path.last().unwrap();
+        let next = self.get(next_idx.arena);
+        if next.is_lack() {
+            self.handle_lack(&sibling_path.as_ref().into());
+            return true;
+        }
+
+        if leaf
+            .elements
+            .last()
+            .unwrap()
+            .can_merge(next.elements.first().unwrap())
+        {
+            let (a, b) = self.get2_mut(leaf_idx.arena, next_idx.arena);
+            while a
+                .elements
+                .last()
+                .map(|x| x.can_merge(b.elements.first().unwrap()))
+                .unwrap_or(false)
+            {
+                let last = a.elements.pop().unwrap();
+                b.elements[0].merge_left(&last);
+            }
+
+            if a.is_lack() {
+                self.handle_lack(&path.as_ref().into());
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// return merged, if true the path is invalidated
+    fn try_merge_prev(&mut self, path: NodePath) -> bool {
+        let mut sibling_path = path;
+        if !self.prev_sibling(&mut sibling_path) {
+            return false;
+        }
+
+        self.try_merge_next(sibling_path)
+    }
 }
 
 pub fn delete_range_in_elements<T: Sliceable>(
@@ -250,8 +355,4 @@ pub fn insert_with_split<T: Sliceable + Mergeable>(
             elements.insert_many(index + 1, [elem, right]);
         }
     }
-}
-
-pub trait HasLength<T = usize> {
-    fn rle_len(&self) -> T;
 }

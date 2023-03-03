@@ -184,7 +184,7 @@ impl Idx {
 }
 
 // TODO: can be replaced by a immutable structure?
-type Path = SmallVec<[Idx; 8]>;
+type NodePath = SmallVec<[Idx; 8]>;
 
 struct PathRef<'a>(&'a [Idx]);
 
@@ -235,9 +235,10 @@ impl<'a> PathRef<'a> {
     }
 }
 
+// TODO: should check the path is still valid before using it to update in debug mode
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryResult {
-    node_path: Path,
+    node_path: NodePath,
     pub elem_index: usize,
     pub offset: usize,
     pub found: bool,
@@ -389,8 +390,8 @@ impl<B: BTreeTrait> Node<B> {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
-            elements: HeapVec::new(),
-            children: HeapVec::new(),
+            elements: HeapVec::with_capacity(B::MAX_LEN),
+            children: HeapVec::with_capacity(B::MAX_LEN),
         }
     }
 
@@ -807,7 +808,7 @@ impl<B: BTreeTrait> BTree<B> {
         let parent = self.nodes.get_mut(path[parent_level].arena).unwrap();
         debug_assert!(parent.is_internal());
         let target_level = parent_level + 1;
-        let mut path: Path = path[..=target_level].iter().cloned().collect();
+        let mut path: NodePath = path[..=target_level].iter().cloned().collect();
         let start_index = start
             .map(|x| x.node_path[target_level].arr + 1)
             .unwrap_or(0);
@@ -880,7 +881,7 @@ impl<B: BTreeTrait> BTree<B> {
 
     fn get_slice(
         &mut self,
-        path: &Path,
+        path: &NodePath,
         start_leaf: &Idx,
         start: &QueryResult,
         end_leaf: &Idx,
@@ -958,8 +959,8 @@ impl<B: BTreeTrait> BTree<B> {
         })
     }
 
-    fn first_path(&self) -> Option<Path> {
-        let mut path = Path::new();
+    fn first_path(&self) -> Option<NodePath> {
+        let mut path = NodePath::new();
         let mut index = self.root;
         let mut node = self.nodes.get(index).unwrap();
         if node.is_empty() {
@@ -1132,6 +1133,12 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     #[inline(always)]
+    fn get2_mut(&mut self, a: ArenaIndex, b: ArenaIndex) -> (&mut Node<B>, &mut Node<B>) {
+        let (a, b) = self.nodes.get2_mut(a, b);
+        (a.unwrap(), b.unwrap())
+    }
+
+    #[inline(always)]
     fn get(&self, index: ArenaIndex) -> &Node<B> {
         self.nodes.get(index).unwrap()
     }
@@ -1289,6 +1296,7 @@ impl<B: BTreeTrait> BTree<B> {
     /// find the next sibling at the same level
     ///
     /// return false if there is no next sibling
+    #[must_use]
     fn next_sibling(&self, path: &mut [Idx]) -> bool {
         if path.len() <= 1 {
             return false;
@@ -1318,6 +1326,7 @@ impl<B: BTreeTrait> BTree<B> {
     /// find the next sibling at the same level
     ///
     /// return false if there is no next sibling
+    #[must_use]
     fn prev_sibling(&self, path: &mut [Idx]) -> bool {
         if path.len() <= 1 {
             return false;
@@ -1346,7 +1355,7 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     /// if index is None, then using the last index
-    fn try_get_path_from_indexes(&self, indexes: &[Option<usize>]) -> Option<Path> {
+    fn try_get_path_from_indexes(&self, indexes: &[Option<usize>]) -> Option<NodePath> {
         debug_assert_eq!(indexes[0], Some(0));
         let mut path = smallvec::smallvec![Idx::new(self.root, 0)];
         let mut node_idx = self.root;
