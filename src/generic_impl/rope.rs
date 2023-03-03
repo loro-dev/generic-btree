@@ -326,21 +326,21 @@ impl Rope {
         let pos = self.tree.query::<LengthFinder>(&index);
         let tree = &mut self.tree;
         let index = *pos.node_path.last().unwrap();
-        let node = tree.nodes.get_mut(index.arena).unwrap();
-        let elements = &mut node.elements;
+        let leaf = tree.nodes.get_mut(index.arena).unwrap();
+        let elements = &mut leaf.elements;
         let index = pos.elem_index;
         let offset = pos.offset;
         if index >= elements.len() {
             elements.push(elem.into());
-            return;
-        }
-        let target = &mut elements[index];
-        if target.len() < MAX_ELEM_SIZE || target.capacity() >= elem.len() + target.len() {
-            elements[index].insert(offset, elem.as_bytes())
         } else {
-            rle::insert_with_split(elements, index, offset, elem.into())
+            let target = &mut elements[index];
+            if target.len() < MAX_ELEM_SIZE || target.capacity() >= elem.len() + target.len() {
+                elements[index].insert(offset, elem.as_bytes())
+            } else {
+                rle::insert_with_split(elements, index, offset, elem.into())
+            }
         }
-        let is_full = node.is_full();
+        let is_full = leaf.is_full();
         tree.recursive_update_cache(pos.path_ref());
         if is_full {
             tree.split(pos.path_ref());
