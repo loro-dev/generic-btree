@@ -3,6 +3,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use generic_btree::{HeapVec, Rope};
 use jumprope::JumpRope;
 use rand::{Rng, SeedableRng};
+mod automerge;
 mod utils;
 
 #[derive(Arbitrary, Debug, Clone, Copy)]
@@ -12,11 +13,17 @@ enum Action {
 }
 
 pub fn bench(c: &mut Criterion) {
+    bench_random(c);
+    bench_automerge(c)
+}
+
+fn bench_random(c: &mut Criterion) {
+    let mut b = c.benchmark_group("10K random insert/delete");
     let mut rng = rand::rngs::StdRng::seed_from_u64(123);
     let data: HeapVec<u8> = (0..1_000_000).map(|_| rng.gen()).collect();
     let mut gen = Unstructured::new(&data);
     let actions: [Action; 10_000] = gen.arbitrary().unwrap();
-    c.bench_function("Rope 10K insert/delete", |b| {
+    b.bench_function("Rope 10K insert/delete", |b| {
         let guard = utils::PProfGuard::new("target/rope.svg");
         b.iter(|| {
             let mut rope = Rope::new();
@@ -39,7 +46,7 @@ pub fn bench(c: &mut Criterion) {
         drop(guard);
     });
 
-    c.bench_function("RawString 10K insert/delete", |b| {
+    b.bench_function("RawString", |b| {
         b.iter(|| {
             let mut raw = String::new();
             for action in actions.iter() {
@@ -60,7 +67,7 @@ pub fn bench(c: &mut Criterion) {
         });
     });
 
-    c.bench_function("JumpRope 10K insert/delete", |b| {
+    b.bench_function("JumpRope", |b| {
         b.iter(|| {
             let mut rope = JumpRope::new();
             for action in actions.iter() {
@@ -76,6 +83,40 @@ pub fn bench(c: &mut Criterion) {
                         len = len.min(rope.len_bytes() - pos);
                         rope.remove(pos..(pos + len));
                     }
+                }
+            }
+        });
+    });
+}
+
+fn bench_automerge(c: &mut Criterion) {
+    let mut b = c.benchmark_group("Automerge paper");
+    let actions = automerge::get_automerge_actions();
+    b.bench_function("Rope", |b| {
+        let guard = utils::PProfGuard::new("target/rope-automerge.svg");
+        b.iter(|| {
+            let mut rope = Rope::new();
+            for action in actions.iter() {
+                if action.del > 0 {
+                    rope.delete_range(action.pos..action.pos + action.del);
+                }
+                if !action.ins.is_empty() {
+                    rope.insert(action.pos, &action.ins)
+                }
+            }
+        });
+        drop(guard);
+    });
+
+    b.bench_function("JumpRope", |b| {
+        b.iter(|| {
+            let mut rope = JumpRope::new();
+            for action in actions.iter() {
+                if action.del > 0 {
+                    rope.remove(action.pos..action.pos + action.del);
+                }
+                if !action.ins.is_empty() {
+                    rope.insert(action.pos, &action.ins)
                 }
             }
         });

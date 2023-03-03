@@ -448,11 +448,7 @@ impl BTreeTrait for RopeTrait {
     ) -> isize {
         match diff {
             Some(diff) => {
-                // *cache = (*cache as isize + diff) as usize;
-                // diff
-                let new_cache = caches.iter().map(|x| x.cache).sum::<usize>();
-                let diff = new_cache as isize - *cache as isize;
-                *cache = new_cache;
+                *cache = (*cache as isize + diff) as usize;
                 diff
             }
             None => {
