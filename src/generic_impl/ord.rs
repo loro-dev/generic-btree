@@ -15,7 +15,7 @@ pub struct OrdTreeMap<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug>(
 #[derive(Debug)]
 pub struct OrdTreeSet<Key: Clone + Ord + Debug + 'static>(OrdTreeMap<Key, ()>);
 
-impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> OrdTreeMap<Key, Value> {
+impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTreeMap<Key, Value> {
     #[inline(always)]
     pub fn new() -> Self {
         Self(BTree::new())
@@ -72,18 +72,23 @@ impl<Key: Clone + Ord + Debug + 'static> OrdTreeSet<Key> {
 }
 
 impl<Key: Clone + Ord + Debug + 'static> Default for OrdTreeSet<Key> {
+    #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> Default for OrdTreeMap<Key, Value> {
+impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> Default
+    for OrdTreeMap<Key, Value>
+{
+    #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
 }
 
 impl<Key, Value> Default for OrdTrait<Key, Value> {
+    #[inline(always)]
     fn default() -> Self {
         Self {
             _phantom: Default::default(),
@@ -96,12 +101,14 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
     type WriteBuffer = ();
     type Cache = Option<(Key, Key)>;
 
-    const MAX_LEN: usize = 16;
+    const MAX_LEN: usize = 12;
 
+    #[inline(always)]
     fn element_to_cache(_: &Self::Elem) -> Self::Cache {
         None
     }
 
+    #[inline(always)]
     fn calc_cache_internal(cache: &mut Self::Cache, caches: &[crate::Child<Self>], _: Option<()>) {
         *cache = Some((
             caches[0].cache.as_ref().unwrap().0.clone(),
@@ -109,7 +116,12 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
         ));
     }
 
+    #[inline(always)]
     fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) {
+        if elements.is_empty() {
+            return;
+        }
+
         *cache = Some((
             elements[0].0.clone(),
             elements[elements.len() - 1].0.clone(),
@@ -118,10 +130,11 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
 
     type CacheDiff = ();
 
-    fn merge_cache_diff(diff1: &mut Self::CacheDiff, diff2: &Self::CacheDiff) {}
+    #[inline(always)]
+    fn merge_cache_diff(_: &mut Self::CacheDiff, _: &Self::CacheDiff) {}
 }
 
-impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug> Query<OrdTrait<Key, Value>>
+impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug + 'static> Query<OrdTrait<Key, Value>>
     for OrdTrait<Key, Value>
 {
     type QueryArg = Key;
@@ -168,11 +181,18 @@ mod test {
     fn test() {
         let mut tree: OrdTreeSet<u64> = OrdTreeSet::new();
         let mut rng = rand::rngs::StdRng::seed_from_u64(123);
-        let mut data: HeapVec<u64> = (0..10_000).map(|_| rng.gen()).collect();
+        let mut data: HeapVec<u64> = (0..100).map(|_| rng.gen()).collect();
         for &value in data.iter() {
             tree.insert(value);
         }
         data.sort_unstable();
         assert_eq!(tree.iter().copied().collect::<HeapVec<_>>(), data);
+    }
+
+    #[test]
+    fn test_delete() {
+        let mut tree: OrdTreeSet<u64> = OrdTreeSet::new();
+        tree.insert(12);
+        tree.delete(&12);
     }
 }

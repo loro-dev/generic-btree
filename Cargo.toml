@@ -28,6 +28,11 @@ jumprope = "1.0.0"
 rand = "0.8.5"
 color-backtrace = "0.5.1"
 ctor = "0.1.26"
+pprof = { version = "0.11.1", features = [
+  "flamegraph",
+  "criterion",
+  "frame-pointer",
+] }
 
 
 [[bench]]
@@ -40,3 +45,6 @@ harness = false
 
 [profile.release]
 debug = true
+
+[features]
+test = []

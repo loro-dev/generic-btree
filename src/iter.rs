@@ -1,11 +1,11 @@
 use smallvec::SmallVec;
 
-use crate::{BTree, BTreeTrait, Idx, Node, NodePath, PathRef, Query, QueryResult, StackVec};
+use crate::{BTree, BTreeTrait, Node, NodePath, PathRef, Query, QueryResult, StackVec};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
     tree: &'a BTree<B>,
-    inclusive_end: QueryResult,
+    inclusive_end: NodePath,
     path: NodePath,
     done: bool,
 }
@@ -19,7 +19,7 @@ pub struct Drain<'a, B: BTreeTrait, Q: Query<B>> {
     end_query: Q::QueryArg,
     end_result: QueryResult,
 
-    reversed_elements: StackVec<B::Elem>,
+    reversed_elements: Vec<B::Elem>,
 }
 
 impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
@@ -38,7 +38,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
             current_path: start_result.node_path.clone(),
             start_result,
             end_result,
-            reversed_elements: StackVec::with_capacity(B::MAX_LEN),
+            reversed_elements: Vec::new(),
         }
     }
 }
@@ -77,7 +77,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
                 None
             };
 
-            let iter = Q::delete_range(
+            let iter = Q::drain_range(
                 &mut node.elements,
                 &self.start_query,
                 &self.end_query,
@@ -112,25 +112,25 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
             None
         };
 
-        for _ in Q::delete_range(
+        Q::delete_range(
             &mut node.elements,
             &self.start_query,
             &self.end_query,
             start,
             end,
-        ) {}
+        );
 
         if !is_last {
             let last = self
                 .tree
                 .get_mut(self.end_result.node_path.last().unwrap().arena);
-            for _ in Q::delete_range(
+            Q::delete_range(
                 &mut last.elements,
                 &self.start_query,
                 &self.end_query,
                 None,
                 Some(self.end_result.clone()),
-            ) {}
+            );
         }
     }
 }
@@ -204,6 +204,28 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             // this loop would break since level=0 is guaranteed to be the same
         }
 
+        while level >= 1 {
+            let (child, parent) = self
+                .tree
+                .get2_mut(start_path[level].arena, start_path[level - 1].arena);
+            if child.is_empty() {
+                if start_path[level].arr > 0 {
+                    zipper_left.push(Some(start_path[level].arr - 1));
+                } else {
+                    zipper_left.push(None);
+                }
+                zipper_right.push(Some(start_path[level].arr));
+                assert_eq!(
+                    parent.children[start_path[level].arr].arena,
+                    start_path[level].arena
+                );
+                deleted.push(parent.children.remove(start_path[level].arr).arena);
+            } else {
+                break;
+            }
+            level -= 1;
+        }
+
         // release memory
         for x in deleted {
             self.tree.purge(x);
@@ -227,6 +249,8 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         if let Some(path) = self.tree.try_get_path_from_indexes(&zipper_left) {
             // otherwise the path is invalid (e.g. the tree is empty)
             seal(self.tree, path);
+        } else {
+            self.tree.try_shrink_levels();
         }
     }
 }
@@ -234,26 +258,33 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
 fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: NodePath) {
     // update cache
     let mut sibling_path = path.clone();
-    let same = !tree.next_sibling(&mut sibling_path);
+    let _ = !tree.next_sibling(&mut sibling_path);
     tree.recursive_update_cache(path.as_ref().into());
-    if !same {
-        tree.recursive_update_cache(sibling_path.as_ref().into());
-    }
 
-    for i in 1..path.len() {
+    let mut i = 1;
+    // TODO: if we have parent link and better handle lack method, we can remove this times
+    let mut times = 0;
+    while i < path.len() {
         let idx = path[i];
-        let node = tree.get(idx.arena);
+        let Some(node) = tree.nodes.get(idx.arena) else { break };
         let is_lack = node.is_lack();
         let path_ref: PathRef = path[0..=i].into();
         if is_lack {
             tree.handle_lack(&path_ref);
+            times += 1;
+            if times > 2 {
+                break;
+            }
+            if i > 1 {
+                i -= 1;
+            }
+        } else {
+            times = 0;
+            i += 1;
         }
     }
 
     for i in 1..path.len() {
-        if sibling_path[i] == path[i] {
-            continue;
-        }
         let idx = sibling_path[i];
         let node = match tree.nodes.get(idx.arena) {
             Some(node) => node,
@@ -267,7 +298,8 @@ fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: NodePath) {
         let is_lack = node.is_lack();
         let path_ref: PathRef = sibling_path[0..=i].into();
         if is_lack {
-            tree.handle_lack(&path_ref);
+            // FIXME: if path is invalid it will also return true
+            let _is_parent_lack = tree.handle_lack(&path_ref);
         }
     }
 
@@ -275,11 +307,11 @@ fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: NodePath) {
 }
 
 impl<'a, B: BTreeTrait> Iter<'a, B> {
-    pub fn new(tree: &'a BTree<B>, start: QueryResult, inclusive_end: QueryResult) -> Self {
+    pub fn new(tree: &'a BTree<B>, start: NodePath, inclusive_end: NodePath) -> Self {
         Self {
             tree,
             inclusive_end,
-            path: start.node_path,
+            path: start,
             done: false,
         }
     }
@@ -293,7 +325,7 @@ impl<'a, B: BTreeTrait> Iterator for Iter<'a, B> {
             return None;
         }
 
-        if self.inclusive_end.node_path.last() == self.path.last() {
+        if self.inclusive_end.last() == self.path.last() {
             self.done = true;
         }
 

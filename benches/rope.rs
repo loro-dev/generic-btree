@@ -3,6 +3,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use generic_btree::{HeapVec, Rope};
 use jumprope::JumpRope;
 use rand::{Rng, SeedableRng};
+mod utils;
 
 #[derive(Arbitrary, Debug, Clone, Copy)]
 enum Action {
@@ -16,6 +17,7 @@ pub fn bench(c: &mut Criterion) {
     let mut gen = Unstructured::new(&data);
     let actions: [Action; 10_000] = gen.arbitrary().unwrap();
     c.bench_function("Rope 10K insert/delete", |b| {
+        let guard = utils::PProfGuard::new("target/rope.svg");
         b.iter(|| {
             let mut rope = Rope::new();
             for action in actions.iter() {
@@ -34,6 +36,7 @@ pub fn bench(c: &mut Criterion) {
                 }
             }
         });
+        drop(guard);
     });
 
     c.bench_function("RawString 10K insert/delete", |b| {

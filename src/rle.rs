@@ -1,8 +1,6 @@
 use core::ops::RangeBounds;
 
-use crate::{
-    BTree, BTreeTrait, HeapVec, MutElemArrSlice, NodePath, Query, QueryResult, SmallElemVec,
-};
+use crate::{BTree, BTreeTrait, HeapVec, MutElemArrSlice, NodePath, QueryResult, SmallElemVec};
 
 pub trait Sliceable<T = usize>: HasLength<T> {
     #[must_use]
@@ -129,18 +127,23 @@ pub fn delete_range_in_elements<T: Sliceable>(
     elements: &mut HeapVec<T>,
     start: Option<QueryResult>,
     end: Option<QueryResult>,
-) -> SmallElemVec<T> {
+) -> Vec<T> {
     match (&start, &end) {
         (Some(from), Some(to)) if from.elem_index == to.elem_index => {
-            let mut ans = SmallElemVec::new();
+            if from.elem_index >= elements.len() {
+                assert!(!from.found);
+                return Vec::new();
+            }
+
+            let mut ans = Vec::new();
             let elem = &mut elements[from.elem_index];
             ans.push(elem.slice(from.offset..to.offset));
             if to.offset != elem.rle_len() {
                 if from.offset == 0 {
                     elements[from.elem_index].slice_(to.offset..);
                 } else {
-                    elements[from.elem_index].slice_(..from.offset);
                     let right = elements[from.elem_index].slice(to.offset..);
+                    elements[from.elem_index].slice_(..from.offset);
                     elements.insert(from.elem_index + 1, right);
                 }
             } else if from.offset == 0 {
@@ -154,7 +157,7 @@ pub fn delete_range_in_elements<T: Sliceable>(
         _ => {}
     }
 
-    let mut ans: SmallElemVec<T> = SmallElemVec::new();
+    let mut ans: Vec<T> = Vec::new();
     let start_index = match &start {
         Some(start) => {
             if start.offset == 0 {
@@ -215,7 +218,9 @@ where
                     should_update = should_update || f(&mut elem);
                     let right = slice.elements[start_index].slice(end_offset..);
                     slice.elements[start_index].slice_(..start_offset);
-                    slice.elements.insert_many(start_index + 1, [elem, right]);
+                    slice
+                        .elements
+                        .splice(start_index + 1..start_index + 1, [elem, right]);
                 } else {
                     // slice the elem into two part: ( ..start ), ( start.. )
                     let mut elem = slice.elements[start_index].slice(start_offset..end_offset);
@@ -352,7 +357,7 @@ pub fn insert_with_split<T: Sliceable + Mergeable>(
             left.merge_right(&elem);
             elements.insert(index + 1, right);
         } else {
-            elements.insert_many(index + 1, [elem, right]);
+            elements.splice(index + 1..index + 1, [elem, right]);
         }
     }
 }

@@ -154,12 +154,20 @@ impl UseLengthFinder<RangeNumMapTrait> for RangeNumMapTrait {
     }
 
     #[inline]
+    fn finder_drain_range(
+        elements: &mut generic_btree::HeapVec<<RangeNumMapTrait as BTreeTrait>::Elem>,
+        start: Option<generic_btree::QueryResult>,
+        end: Option<generic_btree::QueryResult>,
+    ) -> Box<dyn Iterator<Item = Elem> + '_> {
+        Box::new(delete_range_in_elements(elements, start, end).into_iter())
+    }
+
     fn finder_delete_range(
         elements: &mut generic_btree::HeapVec<<RangeNumMapTrait as BTreeTrait>::Elem>,
         start: Option<generic_btree::QueryResult>,
         end: Option<generic_btree::QueryResult>,
-    ) -> generic_btree::SmallElemVec<<RangeNumMapTrait as BTreeTrait>::Elem> {
-        delete_range_in_elements(elements, start, end)
+    ) {
+        delete_range_in_elements(elements, start, end);
     }
 }
 

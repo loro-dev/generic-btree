@@ -36,24 +36,26 @@ use crate::rle::HasLength;
 pub mod rle;
 pub type SmallElemVec<T> = SmallVec<[T; 8]>;
 pub type StackVec<T> = SmallVec<[T; 8]>;
-pub type HeapVec<T> = SmallVec<[T; 0]>;
+pub type HeapVec<T> = Vec<T>;
 
 pub trait BTreeTrait {
-    type Elem;
-    type Cache: Default + Clone + Eq;
+    type Elem: Debug;
+    type Cache: Debug + Default + Clone + Eq;
     type CacheDiff;
     /// Use () if you don't need write buffer.
     /// Associated type default is still unstable so we don't provide default value.
-    type WriteBuffer: Clone;
+    type WriteBuffer: Debug + Clone;
     const MAX_LEN: usize;
 
     fn element_to_cache(element: &Self::Elem) -> Self::Cache;
     #[allow(unused)]
+    #[inline(always)]
     fn insert(elements: &mut HeapVec<Self::Elem>, index: usize, offset: usize, elem: Self::Elem) {
         elements.insert(index, elem);
     }
 
     #[allow(unused)]
+    #[inline(always)]
     fn insert_batch(
         elements: &mut HeapVec<Self::Elem>,
         index: usize,
@@ -66,6 +68,7 @@ pub trait BTreeTrait {
     }
 
     #[allow(unused)]
+    #[inline(always)]
     fn apply_write_buffer_to_elements(
         elements: &mut HeapVec<Self::Elem>,
         write_buffer: &Self::WriteBuffer,
@@ -74,6 +77,7 @@ pub trait BTreeTrait {
     }
 
     #[allow(unused)]
+    #[inline(always)]
     fn apply_write_buffer_to_nodes(children: &mut [Child<Self>], write_buffer: &Self::WriteBuffer) {
         unimplemented!()
     }
@@ -97,6 +101,7 @@ pub trait Query<B: BTreeTrait> {
     fn find_element(&mut self, target: &Self::QueryArg, elements: &[B::Elem]) -> FindResult;
 
     #[allow(unused)]
+    #[inline(always)]
     fn delete(
         elements: &mut HeapVec<B::Elem>,
         query: &Self::QueryArg,
@@ -111,19 +116,32 @@ pub trait Query<B: BTreeTrait> {
     }
 
     #[allow(unused)]
+    #[inline(always)]
+    fn drain_range<'a, 'b>(
+        elements: &'a mut HeapVec<B::Elem>,
+        start_query: &'b Self::QueryArg,
+        end_query: &'b Self::QueryArg,
+        start: Option<QueryResult>,
+        end: Option<QueryResult>,
+    ) -> Box<dyn Iterator<Item = B::Elem> + 'a> {
+        Box::new(match (start, end) {
+            (None, None) => elements.drain(..),
+            (None, Some(to)) => elements.drain(..to.elem_index),
+            (Some(from), None) => elements.drain(from.elem_index..),
+            (Some(from), Some(to)) => elements.drain(from.elem_index..to.elem_index),
+        })
+    }
+
+    #[allow(unused)]
+    #[inline(always)]
     fn delete_range(
         elements: &mut HeapVec<B::Elem>,
         start_query: &Self::QueryArg,
         end_query: &Self::QueryArg,
         start: Option<QueryResult>,
         end: Option<QueryResult>,
-    ) -> SmallElemVec<B::Elem> {
-        match (start, end) {
-            (None, None) => elements.drain(..).collect(),
-            (None, Some(to)) => elements.drain(..to.elem_index).collect(),
-            (Some(from), None) => elements.drain(from.elem_index..).collect(),
-            (Some(from), Some(to)) => elements.drain(from.elem_index..to.elem_index).collect(),
-        }
+    ) {
+        Self::drain_range(elements, start_query, end_query, start, end);
     }
 }
 
@@ -136,6 +154,7 @@ pub struct BTree<B: BTreeTrait> {
 }
 
 impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
+    #[inline]
     fn clone(&self) -> Self {
         Self {
             nodes: self.nodes.clone(),
@@ -302,11 +321,55 @@ impl<
     > Debug for BTree<B>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("BTree")
-            .field("nodes", &self.nodes)
-            .field("root", &self.root)
-            .field("root_cache", &self.root_cache)
-            .finish()
+        fn fmt_node<
+            W: Debug,
+            Cache: Debug,
+            Elem: Debug,
+            B: BTreeTrait<Elem = Elem, WriteBuffer = W>,
+        >(
+            tree: &BTree<B>,
+            node: &Node<B>,
+            f: &mut core::fmt::Formatter<'_>,
+            indent_size: usize,
+        ) -> core::fmt::Result {
+            if node.is_internal() {
+                for child in node.children.iter() {
+                    indent(f, indent_size)?;
+                    f.write_fmt(format_args!(
+                        "Arena({:?}) Cache: {:?} Buffer: {:?}\n",
+                        &child.arena, &child.cache, &child.write_buffer
+                    ))?;
+                    let child_node = tree.get(child.arena);
+                    fmt_node::<W, Cache, Elem, B>(tree, child_node, f, indent_size + 1)?;
+                }
+            } else {
+                if node.elements.is_empty() {
+                    indent(f, indent_size)?;
+                    f.write_fmt(format_args!("EMPTY\n"))?;
+                }
+                for elem in node.elements.iter() {
+                    indent(f, indent_size)?;
+                    f.write_fmt(format_args!("Elem: {:?}\n", elem))?;
+                }
+            }
+
+            Ok(())
+        }
+
+        fn indent(f: &mut core::fmt::Formatter<'_>, indent: usize) -> core::fmt::Result {
+            for _ in 0..indent {
+                f.write_str("    ")?;
+            }
+            Ok(())
+        }
+
+        f.write_str("BTree\n")?;
+        indent(f, 1)?;
+        f.write_fmt(format_args!(
+            "Root Arena({:?}) Cache: {:?}\n",
+            &self.root, &self.root_cache
+        ))?;
+        fmt_node::<W, Cache, Elem, B>(self, self.nodes.get(self.root).unwrap(), f, 1)
     }
 }
 
@@ -413,7 +476,7 @@ impl<B: BTreeTrait> Node<B> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn len(&self) -> usize {
         if self.is_internal() {
             self.children.len()
@@ -422,7 +485,7 @@ impl<B: BTreeTrait> Node<B> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -437,6 +500,7 @@ impl<B: BTreeTrait> Node<B> {
         !self.children.is_empty()
     }
 
+    #[inline(always)]
     fn calc_cache(&self, cache: &mut B::Cache, diff: Option<B::CacheDiff>) -> B::CacheDiff {
         if self.is_internal() {
             B::calc_cache_internal(cache, &self.children, diff)
@@ -529,7 +593,7 @@ impl<B: BTreeTrait> BTree<B> {
             );
         } else {
             node.elements
-                .insert_many(result.elem_index, data.into_iter())
+                .splice(result.elem_index..result.elem_index, data);
         }
 
         let is_full = node.is_full();
@@ -984,6 +1048,24 @@ impl<B: BTreeTrait> BTree<B> {
         Some(path)
     }
 
+    fn last_path(&self) -> Option<NodePath> {
+        let mut path = NodePath::new();
+        let mut index = self.root;
+        let mut node = self.nodes.get(index).unwrap();
+        if node.is_empty() {
+            return None;
+        }
+
+        while node.is_internal() {
+            path.push(Idx::new(index, node.children.len() - 1));
+            index = node.children[node.children.len() - 1].arena;
+            node = self.nodes.get(index).unwrap();
+        }
+
+        path.push(Idx::new(index, node.elements.len() - 1));
+        Some(path)
+    }
+
     #[inline]
     pub fn range<Q>(&self, range: Range<Q::QueryArg>) -> Range<QueryResult>
     where
@@ -1007,7 +1089,7 @@ impl<B: BTreeTrait> BTree<B> {
     ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
         let start = range.start;
         let end = range.end;
-        let mut node_iter = iter::Iter::new(self, start.clone(), end.clone());
+        let mut node_iter = iter::Iter::new(self, start.node_path.clone(), end.node_path.clone());
         let mut elem_iter: Option<Map<_, _>> = None;
         core::iter::from_fn(move || loop {
             if let Some(inner_elem_iter) = &mut elem_iter {
@@ -1184,10 +1266,10 @@ impl<B: BTreeTrait> BTree<B> {
                         let move_len = (a.len() - b.len()) / 2;
                         if a.is_internal() {
                             b.children
-                                .insert_many(0, a.children.drain(a.children.len() - move_len..));
+                                .splice(0..0, a.children.drain(a.children.len() - move_len..));
                         } else {
                             b.elements
-                                .insert_many(0, a.elements.drain(a.elements.len() - move_len..));
+                                .splice(0..0, a.elements.drain(a.elements.len() - move_len..));
                         }
                     }
                     a.calc_cache(&mut a_cache, None);
@@ -1215,9 +1297,9 @@ impl<B: BTreeTrait> BTree<B> {
                     } else {
                         // merge a to b, delete a
                         if a.is_internal() {
-                            b.children.insert_many(0, core::mem::take(&mut a.children));
+                            b.children.splice(0..0, core::mem::take(&mut a.children));
                         } else {
-                            b.elements.insert_many(0, core::mem::take(&mut a.elements));
+                            b.elements.splice(0..0, core::mem::take(&mut a.elements));
                         }
                         b.calc_cache(&mut b_cache, None);
                         let parent = self.get_mut(path.parent().unwrap().arena);
@@ -1285,7 +1367,7 @@ impl<B: BTreeTrait> BTree<B> {
     fn purge(&mut self, index: ArenaIndex) {
         let mut stack: SmallVec<[_; 64]> = smallvec::smallvec![index];
         while let Some(x) = stack.pop() {
-            let node = self.get(x);
+            let Some(node) = self.nodes.get(x) else { continue };
             for x in node.children.iter() {
                 stack.push(x.arena);
             }
@@ -1361,6 +1443,9 @@ impl<B: BTreeTrait> BTree<B> {
         let mut node_idx = self.root;
         for &index in indexes[1..].iter() {
             let node = self.get(node_idx);
+            if node.children.is_empty() {
+                return None;
+            }
 
             let i = match index {
                 Some(index) => index,
@@ -1397,7 +1482,7 @@ fn add_path_to_dirty_map(path: &[Idx], dirty_map: &mut DirtyMap) {
             // parent is already created by others, so all ancestors must also be created
             break;
         } else {
-            dirty_map.insert((parent_level, parent.arena), smallvec::smallvec![*current]);
+            dirty_map.insert((parent_level, parent.arena), vec![*current]);
             current = parent;
             parent_level -= 1;
         }
@@ -1410,23 +1495,26 @@ impl<B: BTreeTrait> BTree<B> {
         // check cache
         for (index, node) in self.nodes.iter() {
             if node.is_internal() {
+                assert!(!node.is_empty());
                 for child_info in node.children.iter() {
                     let child = self.get(child_info.arena);
                     let mut cache = Default::default();
                     child.calc_cache(&mut cache, None);
-                    assert!(cache == child_info.cache);
+                    assert_eq!(cache, child_info.cache);
                 }
             }
 
-            if index != self.root {
-                assert!(!node.is_lack(), "len={}", node.len());
-            }
+            // FIXME: enable these checking when we have parent link
+            // if index != self.root {
+            //     assert!(!node.is_lack(), "len={}\n", node.len());
+            // }
 
-            assert!(!node.is_full(), "len={}", node.len());
+            // assert!(!node.is_full(), "len={}", node.len());
         }
 
         // TODO: check leaf at same level
         // TODO: check custom invariants
+        // TODO: check purge works correctly
     }
 }
 

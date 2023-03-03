@@ -26,6 +26,12 @@ fuzz_target!(|actions: Vec<Action>| {
                 if let Some(value) = value {
                     tree_a.remove(&value);
                     tree.delete(&value);
+                } else {
+                    let value = tree_a.iter().nth(0).copied();
+                    if let Some(value) = value {
+                        tree_a.remove(&value);
+                        tree.delete(&value);
+                    }
                 }
             }
         }
