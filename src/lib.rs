@@ -17,7 +17,7 @@
 //!
 //!
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use core::{
     fmt::Debug,
@@ -1145,14 +1145,17 @@ impl<B: BTreeTrait> BTree<B> {
     // the cache will be up-to-date after this method
     fn split(&mut self, path: PathRef) {
         let node = self.nodes.get_mut(path.this().arena).unwrap();
-        let mut right: Node<B> = Node::new();
+        let mut right: Node<B> = Node {
+            elements: Vec::new(),
+            children: Vec::new(),
+        };
         // split
         if node.is_internal() {
             let split = node.children.len() / 2;
-            right.children.extend(node.children.drain(split..));
+            right.children = node.children.split_off(split);
         } else {
             let split = node.elements.len() / 2;
-            right.elements.extend(node.elements.drain(split..));
+            right.elements = node.elements.split_off(split);
         }
 
         // update cache

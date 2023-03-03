@@ -7,7 +7,7 @@ mod utils;
 
 pub fn bench(c: &mut Criterion) {
     let mut rng = rand::rngs::StdRng::seed_from_u64(123);
-    let data: HeapVec<u64> = (0..1_000_000).map(|_| rng.gen()).collect();
+    let data: HeapVec<u64> = (0..100_000).map(|_| rng.gen()).collect();
     c.bench_function("OrdTree 100K insert", |b| {
         let guard = utils::PProfGuard::new("target/ord-tree.svg");
         b.iter(|| {

@@ -1,6 +1,6 @@
 use core::ops::RangeBounds;
 
-use crate::{BTree, BTreeTrait, HeapVec, MutElemArrSlice, NodePath, QueryResult, SmallElemVec};
+use crate::{BTree, BTreeTrait, HeapVec, MutElemArrSlice, NodePath, QueryResult};
 
 pub trait Sliceable<T = usize>: HasLength<T> {
     #[must_use]

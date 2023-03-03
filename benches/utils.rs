@@ -24,6 +24,7 @@ impl Drop for PProfGuard {
             let file = File::create(self.path.as_str()).unwrap();
             let mut options = Options::default();
             options.direction = Direction::Inverted;
+            options.flame_chart = false;
             report.flamegraph_with_options(file, &mut options).unwrap();
         };
     }

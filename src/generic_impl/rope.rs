@@ -8,6 +8,8 @@ use crate::{
     BTree, BTreeTrait, FindResult, HeapVec, LengthFinder,
 };
 
+const MAX_ELEM_SIZE: usize = 128;
+
 use super::len_finder::UseLengthFinder;
 
 #[derive(Debug)]
@@ -34,6 +36,10 @@ impl RopeElem {
         self.left.len() + self.right.len()
     }
 
+    fn capacity(&self) -> usize {
+        self.left.capacity()
+    }
+
     fn new() -> Self {
         Self {
             left: Vec::new(),
@@ -58,9 +64,20 @@ impl RopeElem {
         self.left.push(new);
     }
 
-    fn delete(&mut self, pos: usize, len: usize) -> usize {
-        self.shift_at(pos);
+    fn delete(&mut self, range: impl RangeBounds<usize>) -> usize {
+        let start = match range.start_bound() {
+            std::ops::Bound::Included(&pos) => pos,
+            std::ops::Bound::Excluded(&pos) => pos + 1,
+            std::ops::Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            std::ops::Bound::Included(&pos) => pos + 1,
+            std::ops::Bound::Excluded(&pos) => pos,
+            std::ops::Bound::Unbounded => self.len(),
+        };
+        self.shift_at(start);
         let mut deleted = 0;
+        let len = end - start;
         while deleted < len && !self.right.is_empty() {
             self.right.pop();
             deleted += 1;
@@ -195,7 +212,7 @@ impl Sliceable for RopeElem {
 
 impl Mergeable for RopeElem {
     fn can_merge(&self, rhs: &Self) -> bool {
-        self.len() + rhs.len() <= self.left.capacity()
+        self.len() + rhs.len() <= self.left.capacity().max(128)
     }
 
     fn merge_right(&mut self, rhs: &Self) {
@@ -233,11 +250,11 @@ impl UseLengthFinder<RopeTrait> for RopeTrait {
     }
 
     fn finder_drain_range(
-        elements: &mut HeapVec<<RopeTrait as BTreeTrait>::Elem>,
-        start: Option<crate::QueryResult>,
-        end: Option<crate::QueryResult>,
+        _: &mut HeapVec<<RopeTrait as BTreeTrait>::Elem>,
+        _: Option<crate::QueryResult>,
+        _: Option<crate::QueryResult>,
     ) -> Box<dyn Iterator<Item = <RopeTrait as BTreeTrait>::Elem> + '_> {
-        Box::new(rle::delete_range_in_elements(elements, start, end).into_iter())
+        unimplemented!()
     }
 
     fn finder_delete_range(
@@ -245,7 +262,52 @@ impl UseLengthFinder<RopeTrait> for RopeTrait {
         start: Option<crate::QueryResult>,
         end: Option<crate::QueryResult>,
     ) {
-        rle::delete_range_in_elements(elements, start, end);
+        match (&start, &end) {
+            (Some(from), Some(to)) if from.elem_index == to.elem_index => {
+                if from.elem_index >= elements.len() {
+                    return;
+                }
+
+                elements[from.elem_index].delete(from.offset..to.offset);
+                return;
+            }
+            _ => {}
+        }
+
+        let start_index = match &start {
+            Some(start) => {
+                if start.offset == 0 {
+                    // the whole element is included in the target range
+                    start.elem_index
+                } else if start.offset == elements[start.elem_index].rle_len() {
+                    // the start element is not included in the target range
+                    start.elem_index + 1
+                } else {
+                    // partially included
+                    let elem = &mut elements[start.elem_index];
+                    elem.delete(start.offset..);
+                    start.elem_index + 1
+                }
+            }
+            None => 0,
+        };
+        match &end {
+            Some(end) if end.elem_index < elements.len() => {
+                if end.offset == elements[end.elem_index].rle_len() {
+                    // the whole element is included in the target range
+                    elements.drain(start_index..end.elem_index + 1);
+                } else if end.offset != 0 {
+                    elements.drain(start_index..end.elem_index);
+                    let elem = &mut elements[start_index];
+                    elem.delete(..end.offset);
+                } else {
+                    elements.drain(start_index..end.elem_index);
+                }
+            }
+            _ => {
+                elements.drain(start_index..);
+            }
+        };
     }
 }
 
@@ -261,7 +323,28 @@ impl Rope {
     }
 
     pub fn insert(&mut self, index: usize, elem: &str) {
-        self.tree.insert::<LengthFinder>(&index, elem.into());
+        let pos = self.tree.query::<LengthFinder>(&index);
+        let tree = &mut self.tree;
+        let index = *pos.node_path.last().unwrap();
+        let node = tree.nodes.get_mut(index.arena).unwrap();
+        let elements = &mut node.elements;
+        let index = pos.elem_index;
+        let offset = pos.offset;
+        if index >= elements.len() {
+            elements.push(elem.into());
+            return;
+        }
+        let target = &mut elements[index];
+        if target.len() < MAX_ELEM_SIZE || target.capacity() >= elem.len() + target.len() {
+            elements[index].insert(offset, elem.as_bytes())
+        } else {
+            rle::insert_with_split(elements, index, offset, elem.into())
+        }
+        let is_full = node.is_full();
+        tree.recursive_update_cache(pos.path_ref());
+        if is_full {
+            tree.split(pos.path_ref());
+        }
     }
 
     pub fn delete_range(&mut self, range: impl RangeBounds<usize>) {
@@ -352,7 +435,7 @@ impl BTreeTrait for RopeTrait {
     type WriteBuffer = ();
     type Cache = usize;
 
-    const MAX_LEN: usize = 4;
+    const MAX_LEN: usize = 12;
 
     fn element_to_cache(_: &Self::Elem) -> Self::Cache {
         1
@@ -389,7 +472,16 @@ impl BTreeTrait for RopeTrait {
     }
 
     fn insert(elements: &mut HeapVec<Self::Elem>, index: usize, offset: usize, elem: Self::Elem) {
-        rle::insert_with_split(elements, index, offset, elem)
+        if index >= elements.len() {
+            elements.push(elem);
+            return;
+        }
+        let target = &mut elements[index];
+        if target.len() < MAX_ELEM_SIZE || target.capacity() >= elem.len() + target.len() {
+            elements[index].insert(offset, &elem.left)
+        } else {
+            rle::insert_with_split(elements, index, offset, elem)
+        }
     }
 
     type CacheDiff = isize;
@@ -430,7 +522,7 @@ mod test {
         fn delete() {
             let mut e = RopeElem::new();
             e.insert(0, "0123456".as_bytes());
-            e.delete(2, 2);
+            e.delete(2..4);
             assert_eq!(e.to_string(), "01456".to_string());
         }
 
@@ -477,6 +569,17 @@ mod test {
         rope.insert(0, "135");
         rope.delete_range(1..2);
         assert_eq!(&rope.to_string(), "15");
+    }
+
+    #[test]
+    fn test_insert_repeatedly() {
+        let mut rope = Rope::new();
+        rope.insert(0, "123");
+        rope.insert(1, "x");
+        rope.insert(2, "y");
+        rope.insert(3, "z");
+        assert_eq!(&rope.to_string(), "1xyz23");
+        dbg!(rope);
     }
 
     #[test]
