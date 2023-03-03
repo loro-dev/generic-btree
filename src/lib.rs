@@ -41,6 +41,7 @@ pub type HeapVec<T> = SmallVec<[T; 0]>;
 pub trait BTreeTrait {
     type Elem;
     type Cache: Default + Clone + Eq;
+    type CacheDiff;
     /// Use () if you don't need write buffer.
     /// Associated type default is still unstable so we don't provide default value.
     type WriteBuffer: Clone;
@@ -77,14 +78,13 @@ pub trait BTreeTrait {
         unimplemented!()
     }
 
-    /// This method do not return new cache to avoid unnecessary heap allocation.
-    /// It should not depend on the data of `cache` because it may not be
-    /// the cache of the same element.
-    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[Child<Self>]);
-    /// This method do not return new cache to avoid unnecessary heap allocation
-    /// It should not depend on the data of `cache` because it may not be
-    /// the cache of the same element.
-    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]);
+    fn calc_cache_internal(
+        cache: &mut Self::Cache,
+        caches: &[Child<Self>],
+        diff: Option<Self::CacheDiff>,
+    ) -> Self::CacheDiff;
+    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) -> Self::CacheDiff;
+    fn merge_cache_diff(diff1: &mut Self::CacheDiff, diff2: &Self::CacheDiff);
 }
 
 pub trait Query<B: BTreeTrait> {
@@ -437,9 +437,9 @@ impl<B: BTreeTrait> Node<B> {
         !self.children.is_empty()
     }
 
-    fn calc_cache(&self, cache: &mut B::Cache) {
+    fn calc_cache(&self, cache: &mut B::Cache, diff: Option<B::CacheDiff>) -> B::CacheDiff {
         if self.is_internal() {
-            B::calc_cache_internal(cache, &self.children)
+            B::calc_cache_internal(cache, &self.children, diff)
         } else {
             B::calc_cache_leaf(cache, &self.elements)
         }
@@ -717,7 +717,7 @@ impl<B: BTreeTrait> BTree<B> {
             self.nodes
                 .get(self.root)
                 .unwrap()
-                .calc_cache(&mut self.root_cache);
+                .calc_cache(&mut self.root_cache, None);
         }
     }
 
@@ -788,7 +788,7 @@ impl<B: BTreeTrait> BTree<B> {
             self.nodes
                 .get(self.root)
                 .unwrap()
-                .calc_cache(&mut self.root_cache);
+                .calc_cache(&mut self.root_cache, None);
         }
     }
 
@@ -908,18 +908,25 @@ impl<B: BTreeTrait> BTree<B> {
     fn update_dirty_cache_map(&mut self, dirty_map: DirtyMap) {
         let mut dirty_set: StackVec<((isize, ArenaIndex), _)> = dirty_map.into_iter().collect();
         dirty_set.sort_unstable_by_key(|x| -x.0 .0);
-        for ((_, parent), children) in dirty_set {
+        let mut diff_map: FxHashMap<ArenaIndex, B::CacheDiff> = FxHashMap::default();
+        for ((_, parent_idx), children) in dirty_set {
             for Idx { arena, arr } in children {
-                let (child, parent) = self.nodes.get2_mut(arena, parent);
-                let (child, parent) = (child.unwrap(), parent.unwrap());
-                child.calc_cache(&mut parent.children[arr].cache);
+                let (child, parent) = self.get2_mut(arena, parent_idx);
+                let cache_diff =
+                    child.calc_cache(&mut parent.children[arr].cache, diff_map.remove(&arena));
+
+                if let Some(e) = diff_map.get_mut(&parent_idx) {
+                    B::merge_cache_diff(e, &cache_diff);
+                } else {
+                    diff_map.insert(parent_idx, cache_diff);
+                }
             }
         }
 
         self.nodes
             .get(self.root)
             .unwrap()
-            .calc_cache(&mut self.root_cache);
+            .calc_cache(&mut self.root_cache, None);
     }
 
     pub fn flush_write_buffer(&mut self) {
@@ -1068,9 +1075,15 @@ impl<B: BTreeTrait> BTree<B> {
 
         // update cache
         let mut right_cache = B::Cache::default();
-        right.calc_cache(&mut right_cache);
+        right.calc_cache(&mut right_cache, None);
         let right = self.nodes.insert(right);
-        let this_cache = self.calc_cache(path.this().arena);
+        let this_cache = {
+            let node = path.this().arena;
+            let node = self.get_mut(node);
+            let mut cache = Default::default();
+            node.calc_cache(&mut cache, None);
+            cache
+        };
 
         self.inner_insert_node(
             path.parent_path(),
@@ -1116,15 +1129,8 @@ impl<B: BTreeTrait> BTree<B> {
         let root = self.get_mut(self.root);
         root.children.push(left);
         root.children.push(right);
-        root.calc_cache(&mut cache);
+        root.calc_cache(&mut cache, None);
         self.root_cache = cache;
-    }
-
-    fn calc_cache(&mut self, node: ArenaIndex) -> B::Cache {
-        let node = self.get_mut(node);
-        let mut cache = Default::default();
-        node.calc_cache(&mut cache);
-        cache
     }
 
     #[inline(always)]
@@ -1184,8 +1190,8 @@ impl<B: BTreeTrait> BTree<B> {
                                 .insert_many(0, a.elements.drain(a.elements.len() - move_len..));
                         }
                     }
-                    a.calc_cache(&mut a_cache);
-                    b.calc_cache(&mut b_cache);
+                    a.calc_cache(&mut a_cache, None);
+                    b.calc_cache(&mut b_cache, None);
                     let parent = self.get_mut(path.parent().unwrap().arena);
                     parent.children[a_idx.arr].cache = a_cache;
                     parent.children[b_idx.arr].cache = b_cache;
@@ -1199,7 +1205,7 @@ impl<B: BTreeTrait> BTree<B> {
                         } else {
                             a.elements.append(&mut b.elements);
                         }
-                        a.calc_cache(&mut a_cache);
+                        a.calc_cache(&mut a_cache, None);
                         let parent = self.get_mut(path.parent().unwrap().arena);
                         parent.children[a_idx.arr].cache = a_cache;
                         parent.children.remove(b_idx.arr);
@@ -1213,7 +1219,7 @@ impl<B: BTreeTrait> BTree<B> {
                         } else {
                             b.elements.insert_many(0, core::mem::take(&mut a.elements));
                         }
-                        b.calc_cache(&mut b_cache);
+                        b.calc_cache(&mut b_cache, None);
                         let parent = self.get_mut(path.parent().unwrap().arena);
                         parent.children[b_idx.arr].cache = b_cache;
                         parent.children.remove(a_idx.arr);
@@ -1264,22 +1270,16 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     fn recursive_update_cache(&mut self, path: PathRef) {
-        let leaf = self.get(path.this().arena);
-        assert!(leaf.is_leaf());
-        let mut child_cache = Default::default();
-        leaf.calc_cache(&mut child_cache);
-        let mut child_index = path.this().arr;
-        for idx in path.parent_path().iter().rev() {
-            let node = self.get_mut(idx.arena);
-            let cache = std::mem::replace(
-                &mut node.children[child_index].cache,
-                std::mem::take(&mut child_cache),
-            );
-            child_cache = cache;
-            node.calc_cache(&mut child_cache);
-            child_index = idx.arr;
+        let mut diff = None;
+        for (parent_idx, this_idx) in path.parent_path().iter().rev().zip(path.iter().rev()) {
+            let (parent, this) = self.get2_mut(parent_idx.arena, this_idx.arena);
+            diff = Some(this.calc_cache(&mut parent.children[this_idx.arr].cache, diff));
         }
-        self.root_cache = child_cache;
+
+        let mut root_cache = std::mem::take(&mut self.root_cache);
+        let root = self.root_mut();
+        root.calc_cache(&mut root_cache, diff);
+        self.root_cache = root_cache;
     }
 
     fn purge(&mut self, index: ArenaIndex) {
@@ -1381,6 +1381,10 @@ impl<B: BTreeTrait> BTree<B> {
     pub fn clear(&mut self) {
         *self = Self::new();
     }
+
+    fn root_mut(&mut self) -> &mut Node<B> {
+        self.get_mut(self.root)
+    }
 }
 
 fn add_path_to_dirty_map(path: &[Idx], dirty_map: &mut DirtyMap) {
@@ -1409,7 +1413,7 @@ impl<B: BTreeTrait> BTree<B> {
                 for child_info in node.children.iter() {
                     let child = self.get(child_info.arena);
                     let mut cache = Default::default();
-                    child.calc_cache(&mut cache);
+                    child.calc_cache(&mut cache, None);
                     assert!(cache == child_info.cache);
                 }
             }

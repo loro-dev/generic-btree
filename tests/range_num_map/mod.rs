@@ -232,12 +232,30 @@ impl BTreeTrait for RangeNumMapTrait {
         element.len
     }
 
-    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[generic_btree::Child<Self>]) {
-        *cache = caches.iter().map(|c| c.cache).sum()
+    fn calc_cache_internal(
+        cache: &mut Self::Cache,
+        caches: &[generic_btree::Child<Self>],
+        diff: Option<isize>,
+    ) -> isize {
+        match diff {
+            Some(diff) => {
+                *cache = (*cache as isize + diff) as usize;
+                diff
+            }
+            None => {
+                let new_cache = caches.iter().map(|c| c.cache).sum();
+                let diff = new_cache as isize - *cache as isize;
+                *cache = new_cache;
+                diff
+            }
+        }
     }
 
-    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) {
-        *cache = elements.iter().map(|c| c.len).sum()
+    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) -> isize {
+        let new_cache = elements.iter().map(|c| c.len).sum();
+        let diff = new_cache as isize - *cache as isize;
+        *cache = new_cache;
+        diff
     }
 
     fn apply_write_buffer_to_elements(
@@ -266,5 +284,11 @@ impl BTreeTrait for RangeNumMapTrait {
             };
             x.write_buffer = v;
         });
+    }
+
+    type CacheDiff = isize;
+
+    fn merge_cache_diff(diff1: &mut Self::CacheDiff, diff2: &Self::CacheDiff) {
+        *diff1 += diff2;
     }
 }

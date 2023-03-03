@@ -133,12 +133,30 @@ impl BTreeTrait for RopeTrait {
         1
     }
 
-    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[crate::Child<Self>]) {
-        *cache = caches.iter().map(|x| x.cache).sum::<usize>()
+    fn calc_cache_internal(
+        cache: &mut Self::Cache,
+        caches: &[crate::Child<Self>],
+        diff: Option<isize>,
+    ) -> isize {
+        match diff {
+            Some(diff) => {
+                *cache = (*cache as isize + diff) as usize;
+                diff
+            }
+            None => {
+                let new_cache = caches.iter().map(|x| x.cache).sum::<usize>();
+                let diff = new_cache as isize - *cache as isize;
+                *cache = new_cache;
+                diff
+            }
+        }
     }
 
-    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) {
-        *cache = elements.len()
+    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) -> isize {
+        let new_cache = elements.len();
+        let diff = new_cache as isize - *cache as isize;
+        *cache = new_cache;
+        diff
     }
 
     fn insert(elements: &mut HeapVec<Self::Elem>, index: usize, _: usize, elem: Self::Elem) {
@@ -154,6 +172,12 @@ impl BTreeTrait for RopeTrait {
         Self::Elem: Clone,
     {
         elements.insert_many(index, elem.into_iter());
+    }
+
+    type CacheDiff = isize;
+
+    fn merge_cache_diff(diff1: &mut Self::CacheDiff, diff2: &Self::CacheDiff) {
+        *diff1 += diff2;
     }
 }
 

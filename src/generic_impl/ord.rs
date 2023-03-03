@@ -102,11 +102,11 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
         None
     }
 
-    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[crate::Child<Self>]) {
+    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[crate::Child<Self>], _: Option<()>) {
         *cache = Some((
             caches[0].cache.as_ref().unwrap().0.clone(),
             caches[caches.len() - 1].cache.as_ref().unwrap().1.clone(),
-        ))
+        ));
     }
 
     fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) {
@@ -115,6 +115,10 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
             elements[elements.len() - 1].0.clone(),
         ))
     }
+
+    type CacheDiff = ();
+
+    fn merge_cache_diff(diff1: &mut Self::CacheDiff, diff2: &Self::CacheDiff) {}
 }
 
 impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug> Query<OrdTrait<Key, Value>>
