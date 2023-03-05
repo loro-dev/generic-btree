@@ -202,7 +202,6 @@ impl Idx {
     }
 }
 
-// TODO: can be replaced by a immutable structure?
 type NodePath = SmallVec<[Idx; 8]>;
 
 struct PathRef<'a>(&'a [Idx]);
@@ -254,7 +253,6 @@ impl<'a> PathRef<'a> {
     }
 }
 
-// TODO: should check the path is still valid before using it to update in debug mode
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryResult {
     pub leaf: ArenaIndex,
@@ -1665,6 +1663,7 @@ impl<B: BTreeTrait> BTree<B> {
     #[allow(unused)]
     pub fn check(&self) {
         // check cache
+        let mut leaf_level = None;
         for (index, node) in self.nodes.iter() {
             if node.is_internal() {
                 assert!(!node.is_empty());
@@ -1676,6 +1675,20 @@ impl<B: BTreeTrait> BTree<B> {
                     assert_eq!(child.parent, Some(index));
                     assert_eq!(cache, child_info.cache);
                 }
+            } else {
+                let mut length = 0;
+                let mut node_idx = index;
+                while node_idx != self.root {
+                    let node = self.get(node_idx);
+                    length += 1;
+                    node_idx = node.parent.unwrap();
+                }
+                match leaf_level {
+                    Some(expected) => assert_eq!(length, expected),
+                    None => {
+                        leaf_level = Some(length);
+                    }
+                }
             }
             if let Some(parent) = node.parent {
                 let parent = self.get(parent);
@@ -1685,17 +1698,12 @@ impl<B: BTreeTrait> BTree<B> {
                 assert_eq!(index, self.root)
             }
 
-            // FIXME: enable these checking when we have parent link
-            // if index != self.root {
-            //     assert!(!node.is_lack(), "len={}\n", node.len());
-            // }
+            if index != self.root {
+                assert!(!node.is_lack(), "len={}\n", node.len());
+            }
 
-            // assert!(!node.is_full(), "len={}", node.len());
+            assert!(!node.is_full(), "len={}", node.len());
         }
-
-        // TODO: check leaf at same level
-        // TODO: check custom invariants
-        // TODO: check purge works correctly
     }
 }
 
