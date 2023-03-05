@@ -24,6 +24,7 @@ use core::{
     iter::Map,
     ops::{Deref, Range},
 };
+use std::mem::take;
 
 use fxhash::FxHashMap;
 use smallvec::SmallVec;
@@ -1166,13 +1167,11 @@ impl<B: BTreeTrait> BTree<B> {
             children: Vec::new(),
         };
 
-        // TODO: Perf remove this vec?
         let mut right_children = Vec::new();
         // split
         if node.is_internal() {
             let split = node.children.len() / 2;
-            right.children = node.children.split_off(split);
-            right_children = right.children.clone();
+            right_children = node.children.split_off(split);
         } else {
             let split = node.elements.len() / 2;
             right.elements = node.elements.split_off(split);
@@ -1180,7 +1179,9 @@ impl<B: BTreeTrait> BTree<B> {
 
         // update cache
         let mut right_cache = B::Cache::default();
-        right.calc_cache(&mut right_cache, None);
+        if right_children.is_empty() {
+            right.calc_cache(&mut right_cache, None);
+        }
         let right_arena_idx = self.nodes.insert(right);
         let this_cache = {
             let node = self.get_mut(node_idx);
@@ -1188,10 +1189,15 @@ impl<B: BTreeTrait> BTree<B> {
             node.calc_cache(&mut cache, None);
             cache
         };
-        for (i, child) in right_children.into_iter().enumerate() {
-            let child = self.get_mut(child.arena);
-            child.parent = Some(right_arena_idx);
-            child.parent_slot = i as u32;
+        if !right_children.is_empty() {
+            for (i, child) in right_children.iter().enumerate() {
+                let child = self.get_mut(child.arena);
+                child.parent = Some(right_arena_idx);
+                child.parent_slot = i as u32;
+            }
+            let right = self.get_mut(right_arena_idx);
+            right.children = right_children;
+            right.calc_cache(&mut right_cache, None);
         }
 
         self.inner_insert_node(
@@ -1229,15 +1235,16 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn update_children_parent_slot_from(&mut self, parent: ArenaIndex, index: usize) {
-        let parent = self.get_mut(parent);
-        // TODO: Perf remove this to_vec?
-        let children = parent.children[index..].to_vec();
-        for (i, child) in children.iter().enumerate() {
+    fn update_children_parent_slot_from(&mut self, parent_idx: ArenaIndex, index: usize) {
+        let parent = self.get_mut(parent_idx);
+        let children = take(&mut parent.children);
+        for (i, child) in children[index..].iter().enumerate() {
             let idx = index + i;
             let child = self.get_mut(child.arena);
             child.parent_slot = idx as u32;
         }
+        let parent = self.get_mut(parent_idx);
+        parent.children = children;
     }
 
     /// right's cache should be up-to-date
