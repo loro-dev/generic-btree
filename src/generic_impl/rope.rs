@@ -1,4 +1,5 @@
 use core::ops::{Range, RangeBounds};
+use std::mem::take;
 extern crate alloc;
 
 use alloc::string::{String, ToString};
@@ -96,14 +97,40 @@ impl RopeElem {
         result
     }
 
+    fn split_right(&mut self, at: usize) -> Self {
+        self.shift_at(at);
+        let mut next_right = take(&mut self.right);
+        Self {
+            left: Vec::new(),
+            right: next_right,
+        }
+    }
+
+    fn split_left(&mut self, at: usize) -> Self {
+        self.shift_at(at);
+        let mut prev_left = take(&mut self.left);
+        Self {
+            left: prev_left,
+            right: Vec::new(),
+        }
+    }
+
     fn shift_at(&mut self, pos: usize) {
         match pos.cmp(&self.left.len()) {
             std::cmp::Ordering::Less => {
+                if self.right.capacity() < self.left.capacity() {
+                    self.right
+                        .reserve(self.left.capacity() - self.right.capacity());
+                }
                 while pos != self.left.len() {
                     self.right.push(self.left.pop().unwrap())
                 }
             }
             std::cmp::Ordering::Greater => {
+                if self.left.capacity() < self.right.capacity() {
+                    self.left
+                        .reserve(self.right.capacity() - self.left.capacity());
+                }
                 while pos != self.left.len() {
                     self.left.push(self.right.pop().unwrap())
                 }
@@ -146,6 +173,13 @@ impl RopeElem {
         }
     }
 
+    fn prepend_bytes(&mut self, bytes: &[u8]) {
+        self.shift_at(0);
+        for i in (0..bytes.len()).rev() {
+            self.right.push(bytes[i]);
+        }
+    }
+
     fn as_bytes(&mut self) -> &[u8] {
         self.shift_at(self.len());
         &self.left
@@ -160,6 +194,11 @@ impl RopeElem {
 
     fn to_string(&self) -> String {
         String::from_utf8(self.iter().collect::<Vec<u8>>()).unwrap()
+    }
+
+    fn push_bytes(&mut self, as_bytes: &[u8]) {
+        self.shift_at(self.len());
+        self.left.extend_from_slice(as_bytes);
     }
 }
 
@@ -337,7 +376,40 @@ impl Rope {
             if target.len() < MAX_ELEM_SIZE || target.capacity() >= elem.len() + target.len() {
                 elements[index].insert(offset, elem.as_bytes())
             } else {
-                rle::insert_with_split(elements, index, offset, elem.into())
+                'insert_with_split: {
+                    if elements.is_empty() {
+                        let elem = elem.into();
+                        elements.push(elem);
+                        break 'insert_with_split;
+                    }
+
+                    if index == elements.len() {
+                        debug_assert_eq!(offset, 0);
+                        let last = elements.last_mut().unwrap();
+                        let mut next = last.split_right(last.len() / 2);
+                        next.push_bytes(elem.as_bytes());
+                        elements.push(next);
+                        break 'insert_with_split;
+                    }
+
+                    assert!(index < elements.len());
+                    if offset == 0 {
+                        let target = &mut elements[index];
+                        let mut prev = target.split_left(target.len() / 2);
+                        prev.prepend_bytes(elem.as_bytes());
+                        elements.insert(index, prev);
+                    } else if offset == elements[index].rle_len() {
+                        let target = &mut elements[index];
+                        let mut next = target.split_right(target.len() / 2);
+                        next.push_bytes(elem.as_bytes());
+                        elements.insert(index + 1, next);
+                    } else {
+                        let left = elements.get_mut(index).unwrap();
+                        let right = left.split_right(offset);
+                        left.push_bytes(elem.as_bytes());
+                        elements.insert(index + 1, right);
+                    }
+                }
             }
         }
         let is_full = leaf.is_full();
