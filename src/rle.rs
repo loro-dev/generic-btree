@@ -45,24 +45,7 @@ impl<T: Mergeable, B: BTreeTrait<Elem = T>> BTree<B> {
     /// Try to merge the elements at the given range.
     /// This operation will invalidate the path if succeed.
     pub fn try_merge_to_neighbors(&mut self, start: QueryResult, end: QueryResult) {
-        let start_leaf = start.node_path.last().unwrap();
-        let mut path = start.node_path.clone();
-        let end_leaf = end.node_path.last().unwrap();
-        type Level = isize; // always positive, use isize to avoid subtract overflow
-
-        loop {
-            let current_leaf = path.last().unwrap();
-            todo!();
-            // let slice = self.get_slice(&path, start_leaf, start, end_leaf, end);
-
-            if current_leaf == end_leaf {
-                break;
-            }
-
-            if !self.next_sibling(&mut path) {
-                break;
-            }
-        }
+        todo!()
     }
 
     /// return merged

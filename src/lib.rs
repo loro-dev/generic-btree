@@ -257,7 +257,7 @@ impl<'a> PathRef<'a> {
 // TODO: should check the path is still valid before using it to update in debug mode
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueryResult {
-    node_path: NodePath,
+    pub leaf: ArenaIndex,
     pub elem_index: usize,
     pub offset: usize,
     pub found: bool,
@@ -293,16 +293,12 @@ impl<'a, Elem> ElemSlice<'a, Elem> {
 }
 
 impl QueryResult {
-    fn path_ref(&self) -> PathRef {
-        self.node_path.as_slice().into()
-    }
-
     pub fn elem<'b, Elem: Debug, B: BTreeTrait<Elem = Elem>>(
         &self,
         tree: &'b BTree<B>,
     ) -> Option<&'b Elem> {
         tree.nodes
-            .get(self.path_ref().this().arena)
+            .get(self.leaf)
             .and_then(|x| x.elements.get(self.elem_index))
     }
 }
@@ -551,13 +547,13 @@ impl<B: BTreeTrait> BTree<B> {
 
     /// It will invoke [`BTreeTrait::insert`]
     pub fn insert_by_query_result(&mut self, result: QueryResult, data: B::Elem) {
-        let index = *result.node_path.last().unwrap();
-        let node = self.nodes.get_mut(index.arena).unwrap();
+        let index = result.leaf;
+        let node = self.nodes.get_mut(index).unwrap();
         B::insert(&mut node.elements, result.elem_index, result.offset, data);
         let is_full = node.is_full();
-        self.recursive_update_cache(result.path_ref().this().arena, true);
+        self.recursive_update_cache(index, true);
         if is_full {
-            self.split(result.path_ref());
+            self.split(result.leaf);
         }
     }
 
@@ -574,14 +570,14 @@ impl<B: BTreeTrait> BTree<B> {
     ) where
         B::Elem: Clone,
     {
-        let index = *result.node_path.last().unwrap();
-        let node = self.nodes.get_mut(index.arena).unwrap();
+        let index = result.leaf;
+        let node = self.nodes.get_mut(index).unwrap();
         B::insert_batch(&mut node.elements, result.elem_index, result.offset, data);
 
         let is_full = node.is_full();
-        self.recursive_update_cache(result.path_ref().this().arena, true);
+        self.recursive_update_cache(result.leaf, true);
         if is_full {
-            self.split(result.path_ref());
+            self.split(result.leaf);
         }
         // TODO: tree may still be unbalanced
     }
@@ -593,8 +589,8 @@ impl<B: BTreeTrait> BTree<B> {
     ) where
         B::Elem: Clone,
     {
-        let index = *result.node_path.last().unwrap();
-        let node = self.nodes.get_mut(index.arena).unwrap();
+        let index = result.leaf;
+        let node = self.nodes.get_mut(index).unwrap();
         if result.found {
             B::insert_batch(
                 &mut node.elements,
@@ -608,9 +604,9 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         let is_full = node.is_full();
-        self.recursive_update_cache(result.path_ref().this().arena, true);
+        self.recursive_update_cache(result.leaf, true);
         if is_full {
-            self.split(result.path_ref());
+            self.split(result.leaf);
         }
     }
 
@@ -623,8 +619,8 @@ impl<B: BTreeTrait> BTree<B> {
             return None;
         }
 
-        let index = *result.node_path.last().unwrap();
-        let node = self.nodes.get_mut(index.arena).unwrap();
+        let index = result.leaf;
+        let node = self.nodes.get_mut(index).unwrap();
         let mut ans = None;
         if result.found {
             ans = Q::delete(&mut node.elements, query, result.elem_index, result.offset);
@@ -632,11 +628,12 @@ impl<B: BTreeTrait> BTree<B> {
 
         let is_full = node.is_full();
         let is_lack = node.is_lack();
-        self.recursive_update_cache(result.path_ref().this().arena, true);
+        self.recursive_update_cache(result.leaf, true);
         if is_full {
-            self.split(result.path_ref());
+            self.split(result.leaf);
         } else if is_lack {
-            let mut path_ref = result.path_ref();
+            let path = self.get_path(index);
+            let mut path_ref: PathRef = path.as_ref().into();
             while !path_ref.is_root()
                 && self.get(path_ref.this().arena).is_lack()
                 && self.handle_lack(path_ref.this().arena).is_parent_lack
@@ -649,7 +646,7 @@ impl<B: BTreeTrait> BTree<B> {
         ans
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn query<Q>(&self, query: &Q::QueryArg) -> QueryResult
     where
         Q: Query<B>,
@@ -664,21 +661,15 @@ impl<B: BTreeTrait> BTree<B> {
     where
         B::Elem: rle::HasLength,
     {
-        let mut node = self
-            .nodes
-            .get(path.node_path.last().unwrap().arena)
-            .unwrap();
+        let mut node = self.nodes.get(path.leaf).unwrap();
         loop {
             if path.elem_index == node.elements.len() {
-                path.elem_index = 0;
-                path.offset = 0;
-
-                node = self
-                    .nodes
-                    .get(path.node_path.last().unwrap().arena)
-                    .unwrap();
-
-                if !self.next_sibling(&mut path.node_path) {
+                node = self.nodes.get(path.leaf).unwrap();
+                if let Some(next) = self.next_same_level_node(path.leaf) {
+                    path.elem_index = 0;
+                    path.offset = 0;
+                    path.leaf = next;
+                } else {
                     path.elem_index = node.children.len();
                     path.offset = 0;
                     break;
@@ -706,7 +697,7 @@ impl<B: BTreeTrait> BTree<B> {
         let mut node = self.nodes.get(self.root).unwrap();
         let mut index = self.root;
         let mut ans = QueryResult {
-            node_path: smallvec::smallvec![Idx::new(index, 0)],
+            leaf: index,
             elem_index: 0,
             offset: 0,
             found: true,
@@ -718,7 +709,7 @@ impl<B: BTreeTrait> BTree<B> {
             ans.found = ans.found && result.found;
             index = node.children[i].arena;
             node = self.nodes.get(index).unwrap();
-            ans.node_path.push(Idx::new(index, i));
+            ans.leaf = index;
         }
 
         let result = finder.find_element(query, &node.elements);
@@ -734,9 +725,10 @@ impl<B: BTreeTrait> BTree<B> {
             return None;
         }
 
-        self.flush_path(PathRef::from(&q.node_path));
-        let index = *q.node_path.last().unwrap();
-        let node = self.nodes.get(index.arena)?;
+        let path = self.get_path(q.leaf);
+        self.flush_path(PathRef::from(&path));
+        let index = q.leaf;
+        let node = self.nodes.get(index)?;
         node.elements.get(q.elem_index)
     }
 
@@ -766,9 +758,9 @@ impl<B: BTreeTrait> BTree<B> {
     {
         let start = range.start;
         let end = range.end;
-        let start_leaf = start.node_path.last().unwrap();
-        let mut path = start.node_path.clone();
-        let end_leaf = end.node_path.last().unwrap();
+        let start_leaf = start.leaf;
+        let mut path = self.get_path(start_leaf);
+        let end_leaf = end.leaf;
         type Level = isize; // always positive, use isize to avoid subtract overflow
         let mut dirty_map: FxHashMap<(Level, ArenaIndex), HeapVec<Idx>> = FxHashMap::default();
 
@@ -781,7 +773,7 @@ impl<B: BTreeTrait> BTree<B> {
                 add_path_to_dirty_map(&path, &mut dirty_map);
             }
 
-            if current_leaf == end_leaf {
+            if current_leaf.arena == end_leaf {
                 break;
             }
 
@@ -815,24 +807,25 @@ impl<B: BTreeTrait> BTree<B> {
         self.need_flush = true;
         let start = range.start;
         let end = range.end;
-        let start_leaf = start.node_path.last().unwrap();
-        let end_leaf = end.node_path.last().unwrap();
+        let start_leaf = start.leaf;
+        let end_leaf = end.leaf;
         type Level = isize; // always positive, use isize to avoid overflow
         let mut dirty_map: FxHashMap<(Level, ArenaIndex), HeapVec<Idx>> = FxHashMap::default();
-        let max_same_parent_level = start
-            .node_path
+        let start_path = self.get_path(start.leaf);
+        let end_path = self.get_path(end.leaf);
+        let max_same_parent_level = start_path
             .iter()
-            .zip(end.node_path.iter())
+            .zip(end_path.iter())
             .take_while(|(a, b)| a.arena == b.arena)
             .count()
             - 1;
-        let leaf_level = start.node_path.len() - 1;
+        let leaf_level = start_path.len() - 1;
 
-        for path in Some(&start.node_path).iter().chain(
+        for path in Some(&start_path).iter().chain(
             (if start_leaf == end_leaf {
                 None
             } else {
-                Some(&end.node_path)
+                Some(&end_path)
             })
             .iter(),
         ) {
@@ -848,16 +841,22 @@ impl<B: BTreeTrait> BTree<B> {
         if max_same_parent_level < leaf_level {
             // write to buffer
             self.write_to_buffer(
-                Some(&start),
-                Some(&end),
+                Some(&start_path),
+                Some(&end_path),
                 max_same_parent_level,
                 &mut g,
                 &mut dirty_map,
             );
 
             for parent_level in max_same_parent_level + 1..leaf_level {
-                self.write_to_buffer(Some(&start), None, parent_level, &mut g, &mut dirty_map);
-                self.write_to_buffer(None, Some(&end), parent_level, &mut g, &mut dirty_map);
+                self.write_to_buffer(
+                    Some(&start_path),
+                    None,
+                    parent_level,
+                    &mut g,
+                    &mut dirty_map,
+                );
+                self.write_to_buffer(None, Some(&end_path), parent_level, &mut g, &mut dirty_map);
             }
         }
 
@@ -878,26 +877,22 @@ impl<B: BTreeTrait> BTree<B> {
 
     fn write_to_buffer<G>(
         &mut self,
-        start: Option<&QueryResult>,
-        end: Option<&QueryResult>,
+        start: Option<&NodePath>,
+        end: Option<&NodePath>,
         parent_level: usize,
         g: &mut G,
         dirty_map: &mut DirtyMap,
     ) where
         G: FnMut(&mut Option<B::WriteBuffer>, &B::Cache) -> bool,
     {
-        let path = start
-            .map(|x| &x.node_path)
-            .unwrap_or_else(|| &end.unwrap().node_path);
+        let path = start.unwrap_or_else(|| end.unwrap());
         let parent = self.nodes.get_mut(path[parent_level].arena).unwrap();
         debug_assert!(parent.is_internal());
         let target_level = parent_level + 1;
         let mut path: NodePath = path[..=target_level].iter().cloned().collect();
-        let start_index = start
-            .map(|x| x.node_path[target_level].arr + 1)
-            .unwrap_or(0);
+        let start_index = start.map(|x| x[target_level].arr + 1).unwrap_or(0);
         let end_index = end
-            .map(|x| x.node_path[target_level].arr)
+            .map(|x| x[target_level].arr)
             .unwrap_or(parent.children.len());
         for (i, child) in parent.children[start_index..end_index]
             .iter_mut()
@@ -966,9 +961,9 @@ impl<B: BTreeTrait> BTree<B> {
     fn get_slice(
         &mut self,
         path: &NodePath,
-        start_leaf: &Idx,
+        start_leaf: ArenaIndex,
         start: &QueryResult,
-        end_leaf: &Idx,
+        end_leaf: ArenaIndex,
         end: &QueryResult,
     ) -> MutElemArrSlice<<B as BTreeTrait>::Elem> {
         let current_leaf = path.last().unwrap();
@@ -976,12 +971,12 @@ impl<B: BTreeTrait> BTree<B> {
         let node = self.get_mut(idx.arena);
         MutElemArrSlice {
             elements: &mut node.elements,
-            start: if current_leaf == start_leaf {
+            start: if current_leaf.arena == start_leaf {
                 Some((start.elem_index, start.offset))
             } else {
                 None
             },
-            end: if current_leaf == end_leaf {
+            end: if current_leaf.arena == end_leaf {
                 Some((end.elem_index, end.offset))
             } else {
                 None
@@ -1109,7 +1104,8 @@ impl<B: BTreeTrait> BTree<B> {
     ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
         let start = range.start;
         let end = range.end;
-        let mut node_iter = iter::Iter::new(self, start.node_path.clone(), end.node_path.clone());
+        let mut node_iter =
+            iter::Iter::new(self, self.get_path(start.leaf), self.get_path(end.leaf));
         let mut elem_iter: Option<Map<_, _>> = None;
         core::iter::from_fn(move || loop {
             if let Some(inner_elem_iter) = &mut elem_iter {
@@ -1121,26 +1117,24 @@ impl<B: BTreeTrait> BTree<B> {
                 match node_iter.next() {
                     Some((path, node)) => {
                         let idx = path.last().unwrap();
-                        let (start_idx, start_offset) =
-                            if idx.arena == start.node_path.last().unwrap().arena {
-                                (start.elem_index, Some(start.offset))
-                            } else {
-                                (0, None)
-                            };
-                        let (end_idx, end_offset) =
-                            if idx.arena == end.node_path.last().unwrap().arena {
-                                (
-                                    (end.elem_index + 1).min(node.elements.len()),
-                                    Some(end.offset),
-                                )
-                            } else {
-                                (node.elements.len(), None)
-                            };
+                        let (start_idx, start_offset) = if idx.arena == start.leaf {
+                            (start.elem_index, Some(start.offset))
+                        } else {
+                            (0, None)
+                        };
+                        let (end_idx, end_offset) = if idx.arena == end.leaf {
+                            (
+                                (end.elem_index + 1).min(node.elements.len()),
+                                Some(end.offset),
+                            )
+                        } else {
+                            (node.elements.len(), None)
+                        };
 
                         elem_iter = Some(node.elements[start_idx..end_idx].iter().enumerate().map(
                             move |(i, x)| ElemSlice {
                                 path: QueryResult {
-                                    node_path: path.clone(),
+                                    leaf: path.last().unwrap().arena,
                                     elem_index: i + start_idx,
                                     offset: if i == 0 { start_offset.unwrap_or(0) } else { 0 },
                                     found: true,
@@ -1163,8 +1157,10 @@ impl<B: BTreeTrait> BTree<B> {
 
     // at call site the cache at path can be out-of-date.
     // the cache will be up-to-date after this method
-    fn split(&mut self, path: PathRef) {
-        let node = self.nodes.get_mut(path.this().arena).unwrap();
+    fn split(&mut self, node_idx: ArenaIndex) {
+        let node = self.nodes.get_mut(node_idx).unwrap();
+        let node_parent = node.parent;
+        let node_parent_slot = node.parent_slot;
         let mut right: Node<B> = Node {
             parent: node.parent,
             parent_slot: u32::MAX,
@@ -1189,8 +1185,7 @@ impl<B: BTreeTrait> BTree<B> {
         right.calc_cache(&mut right_cache, None);
         let right_arena_idx = self.nodes.insert(right);
         let this_cache = {
-            let node = path.this().arena;
-            let node = self.get_mut(node);
+            let node = self.get_mut(node_idx);
             let mut cache = Default::default();
             node.calc_cache(&mut cache, None);
             cache
@@ -1202,8 +1197,8 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         self.inner_insert_node(
-            path.parent_path(),
-            path.this().arr,
+            node_parent,
+            node_parent_slot as usize,
             this_cache,
             Child {
                 arena: right_arena_idx,
@@ -1217,23 +1212,22 @@ impl<B: BTreeTrait> BTree<B> {
     // call site should ensure the cache is up-to-date after this method
     fn inner_insert_node(
         &mut self,
-        parent_path: PathRef,
+        parent_idx: Option<ArenaIndex>,
         index: usize,
         new_cache: B::Cache,
         node: Child<B>,
     ) {
-        if parent_path.is_empty() {
-            self.split_root(new_cache, node);
-        } else {
-            let parent_index = *parent_path.last().unwrap();
-            let parent = self.get_mut(parent_index.arena);
+        if let Some(parent_idx) = parent_idx {
+            let parent = self.get_mut(parent_idx);
             parent.children[index].cache = new_cache;
             parent.children.insert(index + 1, node);
             let is_full = parent.is_full();
-            self.update_children_parent_slot_from(parent_index.arena, index + 1);
+            self.update_children_parent_slot_from(parent_idx, index + 1);
             if is_full {
-                self.split(parent_path);
+                self.split(parent_idx);
             }
+        } else {
+            self.split_root(new_cache, node);
         }
     }
 
@@ -1636,7 +1630,7 @@ impl<B: BTreeTrait> BTree<B> {
         self.get(self.root).is_empty()
     }
 
-    fn get_path_from_arena_index(&self, idx: ArenaIndex) -> NodePath {
+    fn get_path(&self, idx: ArenaIndex) -> NodePath {
         let mut path = NodePath::new();
         let mut node_idx = idx;
         while node_idx != self.root {
@@ -1686,7 +1680,7 @@ impl<B: BTreeTrait> BTree<B> {
             if let Some(parent) = node.parent {
                 let parent = self.get(parent);
                 assert_eq!(parent.children[node.parent_slot as usize].arena, index);
-                self.get_path_from_arena_index(index);
+                self.get_path(index);
             } else {
                 assert_eq!(index, self.root)
             }

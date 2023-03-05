@@ -33,11 +33,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
             self.len += 1;
             self.tree.insert_by_query_result(result, (key, value));
         } else {
-            let leaf = self
-                .tree
-                .nodes
-                .get_mut(result.node_path.last().unwrap().arena)
-                .unwrap();
+            let leaf = self.tree.nodes.get_mut(result.leaf).unwrap();
             leaf.elements[result.elem_index].1 = value;
         }
     }

@@ -1,7 +1,6 @@
-use smallvec::SmallVec;
-use thunderdome::{Arena, Index as ArenaIndex};
+use thunderdome::Index as ArenaIndex;
 
-use crate::{BTree, BTreeTrait, Node, NodePath, PathRef, Query, QueryResult};
+use crate::{BTree, BTreeTrait, Node, NodePath, Query, QueryResult};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
@@ -32,11 +31,11 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
         end_result: QueryResult,
     ) -> Self {
         Self {
+            current_path: tree.get_path(start_result.leaf),
             tree,
             done: false,
             start_query,
             end_query,
-            current_path: start_result.node_path.clone(),
             start_result,
             end_result,
             reversed_elements: Vec::new(),
@@ -57,7 +56,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
                 return None;
             }
 
-            if self.end_result.node_path.last() == self.current_path.last() {
+            if self.end_result.leaf == self.current_path.last().unwrap().arena {
                 self.done = true;
             }
 
@@ -67,12 +66,12 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
             }
 
             let node = self.tree.get_mut(idx.arena);
-            let start = if idx.arena == self.start_result.node_path.last().unwrap().arena {
+            let start = if idx.arena == self.start_result.leaf {
                 Some(self.start_result.clone())
             } else {
                 None
             };
-            let end = if idx.arena == self.end_result.node_path.last().unwrap().arena {
+            let end = if idx.arena == self.end_result.leaf {
                 Some(self.end_result.clone())
             } else {
                 None
@@ -101,12 +100,12 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
 
         let idx = *self.current_path.last().unwrap();
         let node = self.tree.get_mut(idx.arena);
-        let start = if idx.arena == self.start_result.node_path.last().unwrap().arena {
+        let start = if idx.arena == self.start_result.leaf {
             Some(self.start_result.clone())
         } else {
             None
         };
-        let is_last = idx.arena == self.end_result.node_path.last().unwrap().arena;
+        let is_last = idx.arena == self.end_result.leaf;
         let end = if is_last {
             Some(self.end_result.clone())
         } else {
@@ -122,9 +121,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
         );
 
         if !is_last {
-            let last = self
-                .tree
-                .get_mut(self.end_result.node_path.last().unwrap().arena);
+            let last = self.tree.get_mut(self.end_result.leaf);
             Q::delete_range(
                 &mut last.elements,
                 &self.start_query,
@@ -139,8 +136,8 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
 impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
     fn drop(&mut self) {
         self.ensure_trim_start_and_end();
-        let start_path = &self.start_result.node_path;
-        let end_path = &self.end_result.node_path;
+        let start_path = self.tree.get_path(self.start_result.leaf);
+        let end_path = self.tree.get_path(self.end_result.leaf);
         let mut level = start_path.len() - 1;
         let mut deleted = Vec::new();
         let leaf_before_drain_range = {
@@ -260,7 +257,7 @@ fn handle_lack_on_path_to_leaf<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIn
     let mut last_lack_count = 0;
     let mut lack_count = 0;
     loop {
-        let path = tree.get_path_from_arena_index(leaf);
+        let path = tree.get_path(leaf);
         for i in 1..path.len() {
             let Some(node) = tree.nodes.get(path[i].arena) else { unreachable!() };
             let is_lack = node.is_lack();

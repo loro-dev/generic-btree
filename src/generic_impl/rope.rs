@@ -364,8 +364,8 @@ impl Rope {
     pub fn insert(&mut self, index: usize, elem: &str) {
         let pos = self.tree.query::<LengthFinder>(&index);
         let tree = &mut self.tree;
-        let index = *pos.node_path.last().unwrap();
-        let leaf = tree.nodes.get_mut(index.arena).unwrap();
+        let index = pos.leaf;
+        let leaf = tree.nodes.get_mut(index).unwrap();
         let elements = &mut leaf.elements;
         let index = pos.elem_index;
         let offset = pos.offset;
@@ -413,9 +413,9 @@ impl Rope {
             }
         }
         let is_full = leaf.is_full();
-        tree.recursive_update_cache(pos.path_ref().this().arena, true);
+        tree.recursive_update_cache(pos.leaf, true);
         if is_full {
-            tree.split(pos.path_ref());
+            tree.split(pos.leaf);
         }
     }
 
@@ -2965,7 +2965,7 @@ mod test {
 
         use rand::{Rng, SeedableRng};
         let mut rng = rand::rngs::StdRng::seed_from_u64(123);
-        let data: HeapVec<u8> = (0..1_000_000).map(|_| rng.gen()).collect();
+        let data: HeapVec<u8> = (0..100_000).map(|_| rng.gen()).collect();
         let mut gen = arbitrary::Unstructured::new(&data);
         let actions: [Action; 10_000] = gen.arbitrary().unwrap();
         let mut rope = Rope::new();
