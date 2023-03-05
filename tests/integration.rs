@@ -1,6 +1,11 @@
 mod range_num_map;
 use range_num_map::RangeNumMap;
 
+#[ctor::ctor]
+fn init_color_backtrace() {
+    color_backtrace::install();
+}
+
 mod test_range_num_map {
     use super::*;
 

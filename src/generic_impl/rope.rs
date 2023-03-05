@@ -413,7 +413,7 @@ impl Rope {
             }
         }
         let is_full = leaf.is_full();
-        tree.recursive_update_cache(pos.path_ref());
+        tree.recursive_update_cache(pos.path_ref().this().arena, true);
         if is_full {
             tree.split(pos.path_ref());
         }
@@ -647,7 +647,6 @@ mod test {
         rope.insert(2, "y");
         rope.insert(3, "z");
         assert_eq!(&rope.to_string(), "1xyz23");
-        dbg!(rope);
     }
 
     #[test]
@@ -721,7 +720,6 @@ mod test {
         assert_eq!(rope.to_string(), truth);
     }
 
-    use ctor::ctor;
     use Action::*;
 
     #[test]
@@ -3640,7 +3638,7 @@ mod test {
         fuzz(vec![])
     }
 
-    #[ctor]
+    #[ctor::ctor]
     fn init_color_backtrace() {
         color_backtrace::install();
     }

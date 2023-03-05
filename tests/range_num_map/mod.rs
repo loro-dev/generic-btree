@@ -8,6 +8,7 @@ use generic_btree::{
 };
 
 /// This struct keep the mapping of ranges to numbers
+#[derive(Debug)]
 pub struct RangeNumMap(BTree<RangeNumMapTrait>);
 struct RangeNumMapTrait;
 

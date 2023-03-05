@@ -17,7 +17,7 @@
 //!
 //!
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use core::{
     fmt::Debug,
@@ -519,6 +519,10 @@ impl<B: BTreeTrait> Node<B> {
 
 type DirtyMap = FxHashMap<(isize, ArenaIndex), HeapVec<Idx>>;
 
+struct LackInfo {
+    is_parent_lack: bool,
+}
+
 impl<B: BTreeTrait> BTree<B> {
     #[inline]
     pub fn new() -> Self {
@@ -551,7 +555,7 @@ impl<B: BTreeTrait> BTree<B> {
         let node = self.nodes.get_mut(index.arena).unwrap();
         B::insert(&mut node.elements, result.elem_index, result.offset, data);
         let is_full = node.is_full();
-        self.recursive_update_cache(result.path_ref());
+        self.recursive_update_cache(result.path_ref().this().arena, true);
         if is_full {
             self.split(result.path_ref());
         }
@@ -575,7 +579,7 @@ impl<B: BTreeTrait> BTree<B> {
         B::insert_batch(&mut node.elements, result.elem_index, result.offset, data);
 
         let is_full = node.is_full();
-        self.recursive_update_cache(result.path_ref());
+        self.recursive_update_cache(result.path_ref().this().arena, true);
         if is_full {
             self.split(result.path_ref());
         }
@@ -604,7 +608,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         let is_full = node.is_full();
-        self.recursive_update_cache(result.path_ref());
+        self.recursive_update_cache(result.path_ref().this().arena, true);
         if is_full {
             self.split(result.path_ref());
         }
@@ -628,12 +632,15 @@ impl<B: BTreeTrait> BTree<B> {
 
         let is_full = node.is_full();
         let is_lack = node.is_lack();
-        self.recursive_update_cache(result.path_ref());
+        self.recursive_update_cache(result.path_ref().this().arena, true);
         if is_full {
             self.split(result.path_ref());
         } else if is_lack {
             let mut path_ref = result.path_ref();
-            while self.handle_lack(path_ref.this().arena) {
+            while !path_ref.is_root()
+                && self.get(path_ref.this().arena).is_lack()
+                && self.handle_lack(path_ref.this().arena).is_parent_lack
+            {
                 path_ref.set_as_parent_path();
             }
 
@@ -857,11 +864,16 @@ impl<B: BTreeTrait> BTree<B> {
         if !dirty_map.is_empty() {
             self.update_dirty_cache_map(dirty_map);
         } else {
-            self.nodes
-                .get(self.root)
-                .unwrap()
-                .calc_cache(&mut self.root_cache, None);
+            self.update_root_cache();
         }
+    }
+
+    #[inline]
+    fn update_root_cache(&mut self) {
+        self.nodes
+            .get(self.root)
+            .unwrap()
+            .calc_cache(&mut self.root_cache, None);
     }
 
     fn write_to_buffer<G>(
@@ -1291,18 +1303,18 @@ impl<B: BTreeTrait> BTree<B> {
     /// - cache should be up-to-date when calling this.
     ///
     /// return is parent lack
-    fn handle_lack(&mut self, node_idx: ArenaIndex) -> bool {
+    fn handle_lack(&mut self, node_idx: ArenaIndex) -> LackInfo {
         if self.root == node_idx {
-            return false;
+            return LackInfo {
+                is_parent_lack: false,
+            };
         }
 
         let node = self.get(node_idx);
         let parent_idx = node.parent.unwrap();
         let parent = self.get(parent_idx);
-        assert_eq!(parent.children[node.parent_slot as usize].arena, node_idx,);
-        let ans = match self
-            .pair_neighbor(parent_idx, Idx::new(node_idx, node.parent_slot as usize))
-        {
+        debug_assert_eq!(parent.children[node.parent_slot as usize].arena, node_idx,);
+        let ans = match self.pair_neighbor(node_idx) {
             Some((a_idx, b_idx)) => {
                 let parent = self.get_mut(parent_idx);
                 let mut a_cache = std::mem::take(&mut parent.children[a_idx.arr].cache);
@@ -1312,7 +1324,7 @@ impl<B: BTreeTrait> BTree<B> {
                 let (a, b) = self.nodes.get2_mut(a_idx.arena, b_idx.arena);
                 let a = a.unwrap();
                 let b = b.unwrap();
-                let is_lack = if a.len() + b.len() >= B::MAX_LEN {
+                let ans = if a.len() + b.len() >= B::MAX_LEN {
                     // move
                     if a.len() < b.len() {
                         // move part of b's children to a
@@ -1355,10 +1367,12 @@ impl<B: BTreeTrait> BTree<B> {
                     let parent = self.get_mut(parent_idx);
                     parent.children[a_idx.arr].cache = a_cache;
                     parent.children[b_idx.arr].cache = b_cache;
-                    parent.is_lack()
+                    LackInfo {
+                        is_parent_lack: parent.is_lack(),
+                    }
                 } else {
                     // merge
-                    if node_idx == a_idx.arena {
+                    let is_parent_lack = if node_idx == a_idx.arena {
                         // merge b to a, delete b
                         if a.is_internal() {
                             for (i, child) in b.children.iter().enumerate() {
@@ -1397,7 +1411,9 @@ impl<B: BTreeTrait> BTree<B> {
                         self.purge(a_idx.arena);
                         self.update_children_parent_slot_from(parent_idx, a_idx.arr);
                         is_lack
-                    }
+                    };
+
+                    LackInfo { is_parent_lack }
                 };
 
                 for (child, (parent, slot)) in re_parent {
@@ -1405,9 +1421,11 @@ impl<B: BTreeTrait> BTree<B> {
                     child.parent = Some(parent);
                     child.parent_slot = slot as u32;
                 }
-                is_lack
+                ans
             }
-            None => true,
+            None => LackInfo {
+                is_parent_lack: true,
+            },
         };
         ans
     }
@@ -1436,37 +1454,42 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn pair_neighbor(&self, parent: ArenaIndex, mut this_pos: Idx) -> Option<(Idx, Idx)> {
-        let parent = self.get(parent);
-        if this_pos.arr >= parent.children.len()
-            || parent.children[this_pos.arr].arena != this_pos.arena
-        {
-            // need to search correct this_pos.arr
-            let Some(x) = parent
-                .children
-                .iter()
-                .position(|x| x.arena == this_pos.arena) else { return None };
-            this_pos.arr = x;
-        }
+    fn pair_neighbor(&self, this: ArenaIndex) -> Option<(Idx, Idx)> {
+        let node = self.get(this);
+        let arr = node.parent_slot as usize;
+        let parent = self.get(node.parent.unwrap());
 
-        if this_pos.arr == 0 {
+        if arr == 0 {
             parent
                 .children
                 .get(1)
-                .map(|x| (this_pos, Idx::new(x.arena, 1)))
+                .map(|x| (Idx::new(this, arr), Idx::new(x.arena, 1)))
         } else {
             parent
                 .children
-                .get(this_pos.arr - 1)
-                .map(|x| (Idx::new(x.arena, this_pos.arr - 1), this_pos))
+                .get(arr - 1)
+                .map(|x| (Idx::new(x.arena, arr - 1), Idx::new(this, arr)))
         }
     }
 
-    fn recursive_update_cache(&mut self, path: PathRef) {
+    /// Sometimes we cannot use diff because no only the given node is changed, but also its siblings.
+    /// For example, after delete a range of nodes, we cannot use the diff from child to infer the diff of parent.
+    fn recursive_update_cache(&mut self, node_idx: ArenaIndex, can_use_diff: bool) {
+        let mut this_idx = node_idx;
+        let mut node = self.get_mut(node_idx);
+        let mut this_arr = node.parent_slot;
         let mut diff = None;
-        for (parent_idx, this_idx) in path.parent_path().iter().rev().zip(path.iter().rev()) {
-            let (parent, this) = self.get2_mut(parent_idx.arena, this_idx.arena);
-            diff = Some(this.calc_cache(&mut parent.children[this_idx.arr].cache, diff));
+        while node.parent.is_some() {
+            let parent_idx = node.parent.unwrap();
+            let (parent, this) = self.get2_mut(parent_idx, this_idx);
+            if can_use_diff {
+                diff = Some(this.calc_cache(&mut parent.children[this_arr as usize].cache, diff));
+            } else {
+                this.calc_cache(&mut parent.children[this_arr as usize].cache, None);
+            }
+            this_idx = parent_idx;
+            this_arr = parent.parent_slot;
+            node = parent;
         }
 
         let mut root_cache = std::mem::take(&mut self.root_cache);
@@ -1514,6 +1537,33 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         true
+    }
+
+    fn next_same_level_node(&self, node_idx: ArenaIndex) -> Option<ArenaIndex> {
+        let node = self.get(node_idx);
+        let parent = self.get(node.parent?);
+        if let Some(next) = parent.children.get(node.parent_slot as usize + 1) {
+            Some(next.arena)
+        } else if let Some(parent_next) = self.next_same_level_node(node.parent?) {
+            let parent_next = self.get(parent_next);
+            parent_next.children.first().map(|x| x.arena)
+        } else {
+            None
+        }
+    }
+
+    fn prev_same_level_node(&self, node_idx: ArenaIndex) -> Option<ArenaIndex> {
+        let node = self.get(node_idx);
+        let parent = self.get(node.parent?);
+        if node.parent_slot > 0 {
+            let Some(next) = parent.children.get(node.parent_slot as usize - 1) else { unreachable!() };
+            Some(next.arena)
+        } else if let Some(parent_prev) = self.prev_same_level_node(node.parent?) {
+            let parent_prev = self.get(parent_prev);
+            parent_prev.children.last().map(|x| x.arena)
+        } else {
+            None
+        }
     }
 
     /// find the next sibling at the same level
@@ -1581,6 +1631,23 @@ impl<B: BTreeTrait> BTree<B> {
     fn root_mut(&mut self) -> &mut Node<B> {
         self.get_mut(self.root)
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.get(self.root).is_empty()
+    }
+
+    fn get_path_from_arena_index(&self, idx: ArenaIndex) -> NodePath {
+        let mut path = NodePath::new();
+        let mut node_idx = idx;
+        while node_idx != self.root {
+            let node = self.get(node_idx);
+            path.push(Idx::new(node_idx, node.parent_slot as usize));
+            node_idx = node.parent.unwrap();
+        }
+        path.push(Idx::new(self.root, 0));
+        path.reverse();
+        path
+    }
 }
 
 fn add_path_to_dirty_map(path: &[Idx], dirty_map: &mut DirtyMap) {
@@ -1619,6 +1686,9 @@ impl<B: BTreeTrait> BTree<B> {
             if let Some(parent) = node.parent {
                 let parent = self.get(parent);
                 assert_eq!(parent.children[node.parent_slot as usize].arena, index);
+                self.get_path_from_arena_index(index);
+            } else {
+                assert_eq!(index, self.root)
             }
 
             // FIXME: enable these checking when we have parent link

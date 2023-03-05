@@ -1,4 +1,5 @@
 use smallvec::SmallVec;
+use thunderdome::{Arena, Index as ArenaIndex};
 
 use crate::{BTree, BTreeTrait, Node, NodePath, PathRef, Query, QueryResult};
 
@@ -142,9 +143,24 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         let end_path = &self.end_result.node_path;
         let mut level = start_path.len() - 1;
         let mut deleted = Vec::new();
-        let mut zipper_left: SmallVec<[_; 16]> = SmallVec::with_capacity(start_path.len());
-        let mut zipper_right: SmallVec<[_; 16]> = SmallVec::with_capacity(start_path.len());
-        // TODO: formalize zipper left and zipper right and document it
+        let leaf_before_drain_range = {
+            let node_idx = start_path[level].arena;
+            let node = self.tree.get(node_idx);
+            if node.is_empty() {
+                self.tree.prev_same_level_node(node_idx)
+            } else {
+                Some(node_idx)
+            }
+        };
+        let leaf_after_drain_range = {
+            let node_idx = end_path[level].arena;
+            let node = self.tree.get(node_idx);
+            if node.is_empty() {
+                self.tree.next_same_level_node(node_idx)
+            } else {
+                Some(node_idx)
+            }
+        };
         while start_path[level].arena != end_path[level].arena {
             let start_node = self.tree.get(start_path[level].arena);
             let end_node = self.tree.get(end_path[level].arena);
@@ -163,30 +179,12 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             if start_arena == end_arena {
                 // parent is the same, delete start..end
                 let parent = self.tree.get_mut(start_arena);
-                zipper_right.push(Some(del_start));
-                if del_start == 0 && del_end == parent.children.len() {
-                    // if we are deleting the whole node, we need to delete the parent as well
-                    // so the path index at this level would be the last child of the parent
-                    zipper_left.push(None);
-                } else {
-                    zipper_left.push(Some(del_start.max(1) - 1));
-                }
-
                 for x in parent.children.drain(del_start..del_end) {
                     deleted.push(x.arena);
                 }
                 self.tree
                     .update_children_parent_slot_from(start_arena, del_start);
             } else {
-                zipper_right.push(Some(0));
-                if del_start == 0 {
-                    // if we are deleting the whole node, we need to delete the parent as well
-                    // so the path index at this level would be the last child of the parent
-                    zipper_left.push(None);
-                } else {
-                    zipper_left.push(Some(del_start - 1));
-                }
-
                 // parent is different
                 {
                     // delete start..
@@ -214,12 +212,6 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
                 .tree
                 .get2_mut(start_path[level].arena, start_path[level - 1].arena);
             if child.is_empty() {
-                if start_path[level].arr > 0 {
-                    zipper_left.push(Some(start_path[level].arr - 1));
-                } else {
-                    zipper_left.push(None);
-                }
-                zipper_right.push(Some(start_path[level].arr));
                 assert_eq!(
                     parent.children[start_path[level].arr].arena,
                     start_path[level].arena
@@ -240,79 +232,53 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             self.tree.purge(x);
         }
 
-        loop {
-            zipper_left.push(Some(start_path[level].arr));
-            zipper_right.push(Some(start_path[level].arr));
-            if level == 0 {
-                break;
-            }
-            level -= 1;
+        if let Some(after) = leaf_after_drain_range {
+            self.tree.recursive_update_cache(after, false);
         }
 
-        zipper_left.reverse(); // now in root to leaf order
-        zipper_right.reverse(); // now in root to leaf order
-        if let Some(path) = self.tree.try_get_path_from_indexes(&zipper_right) {
-            self.tree.recursive_update_cache(path.as_ref().into());
-        }
-
-        if let Some(path) = self.tree.try_get_path_from_indexes(&zipper_left) {
-            // otherwise the path is invalid (e.g. the tree is empty)
-            seal(self.tree, path);
+        // otherwise the path is invalid (e.g. the tree is empty)
+        if let Some(before) = leaf_before_drain_range {
+            seal(self.tree, before);
         } else {
+            self.tree.update_root_cache();
             self.tree.try_reduce_levels();
         }
     }
 }
 
-fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: NodePath) {
+fn seal<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIndex) {
     // update cache
-    let mut sibling_path = path.clone();
-    let _ = !tree.next_sibling(&mut sibling_path);
-    tree.recursive_update_cache(path.as_ref().into());
-
-    let mut i = 1;
-    // TODO: if we have parent link and better handle lack method, we can remove this times
-    let mut times = 0;
-    while i < path.len() {
-        let idx = path[i];
-        let Some(node) = tree.nodes.get(idx.arena) else { break };
-        let is_lack = node.is_lack();
-        let path_ref: PathRef = path[0..=i].into();
-        if is_lack {
-            tree.handle_lack(path_ref.this().arena);
-            times += 1;
-            if times > 2 {
-                break;
-            }
-            if i > 1 {
-                i -= 1;
-            }
-        } else {
-            times = 0;
-            i += 1;
-        }
+    tree.recursive_update_cache(leaf, false);
+    handle_lack_on_path_to_leaf(tree, leaf);
+    if let Some(sibling) = tree.next_same_level_node(leaf) {
+        handle_lack_on_path_to_leaf(tree, sibling);
     }
-
-    for i in 1..path.len() {
-        let idx = sibling_path[i];
-        let node = match tree.nodes.get(idx.arena) {
-            Some(node) => node,
-            None => {
-                // it must be merged into path
-                // println!("{} {:?} is merged into path", i, idx.arena); //DEBUG
-                sibling_path[i] = path[i];
-                continue;
-            }
-        };
-        let is_lack = node.is_lack();
-        let path_ref: PathRef = sibling_path[0..=i].into();
-        if is_lack {
-            // FIXME: if path is invalid it will also return true
-            let _is_parent_lack = tree.handle_lack(path_ref.this().arena);
-        }
-    }
-
     tree.try_reduce_levels();
+}
+
+fn handle_lack_on_path_to_leaf<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIndex) {
+    let mut last_lack_count = 0;
+    let mut lack_count = 0;
+    loop {
+        let path = tree.get_path_from_arena_index(leaf);
+        for i in 1..path.len() {
+            let Some(node) = tree.nodes.get(path[i].arena) else { unreachable!() };
+            let is_lack = node.is_lack();
+            if is_lack {
+                let lack_info = tree.handle_lack(path[i].arena);
+                if lack_info.is_parent_lack {
+                    lack_count += 1;
+                }
+            }
+        }
+        // parent may be lack after some children is merged
+        if lack_count == 0 || lack_count == last_lack_count {
+            break;
+        }
+
+        last_lack_count = lack_count;
+        lack_count = 0;
+    }
 }
 
 impl<'a, B: BTreeTrait> Iter<'a, B> {
