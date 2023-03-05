@@ -309,6 +309,7 @@ impl QueryResult {
 
 // TODO: use enum to save spaces
 struct Node<B: BTreeTrait> {
+    parent: Option<ArenaIndex>,
     elements: HeapVec<B::Elem>,
     children: HeapVec<Child<B>>,
 }
@@ -406,6 +407,7 @@ impl<
 impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for Node<B> {
     fn clone(&self) -> Self {
         Self {
+            parent: self.parent,
             elements: self.elements.clone(),
             children: self.children.clone(),
         }
@@ -453,6 +455,7 @@ impl<B: BTreeTrait> Node<B> {
     #[inline(always)]
     pub fn new() -> Self {
         Self {
+            parent: None,
             elements: HeapVec::with_capacity(B::MAX_LEN),
             children: HeapVec::with_capacity(B::MAX_LEN),
         }
@@ -500,6 +503,7 @@ impl<B: BTreeTrait> Node<B> {
         !self.children.is_empty()
     }
 
+    /// if diff is not provided, the cache will be calculated from scratch
     #[inline(always)]
     fn calc_cache(&self, cache: &mut B::Cache, diff: Option<B::CacheDiff>) -> B::CacheDiff {
         if self.is_internal() {
@@ -1147,13 +1151,16 @@ impl<B: BTreeTrait> BTree<B> {
     fn split(&mut self, path: PathRef) {
         let node = self.nodes.get_mut(path.this().arena).unwrap();
         let mut right: Node<B> = Node {
+            parent: node.parent,
             elements: Vec::new(),
             children: Vec::new(),
         };
+        let mut right_children = Vec::new();
         // split
         if node.is_internal() {
             let split = node.children.len() / 2;
             right.children = node.children.split_off(split);
+            right_children = right.children.clone();
         } else {
             let split = node.elements.len() / 2;
             right.elements = node.elements.split_off(split);
@@ -1162,7 +1169,7 @@ impl<B: BTreeTrait> BTree<B> {
         // update cache
         let mut right_cache = B::Cache::default();
         right.calc_cache(&mut right_cache, None);
-        let right = self.nodes.insert(right);
+        let right_arena_idx = self.nodes.insert(right);
         let this_cache = {
             let node = path.this().arena;
             let node = self.get_mut(node);
@@ -1170,13 +1177,17 @@ impl<B: BTreeTrait> BTree<B> {
             node.calc_cache(&mut cache, None);
             cache
         };
+        for child in right_children {
+            let child = self.get_mut(child.arena);
+            child.parent = Some(right_arena_idx);
+        }
 
         self.inner_insert_node(
             path.parent_path(),
             path.this().arr,
             this_cache,
             Child {
-                arena: right,
+                arena: right_arena_idx,
                 cache: right_cache,
                 write_buffer: Default::default(),
             },
@@ -1206,17 +1217,34 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn split_root(&mut self, new_cache: B::Cache, new_node: Child<B>) {
+    /// right's cache should be up-to-date
+    fn split_root(&mut self, new_cache: B::Cache, right: Child<B>) {
+        let root_idx = self.root;
+        // set right parent
+        self.get_mut(right.arena).parent = Some(root_idx);
         let root = self.get_mut(self.root);
-        let left: Node<B> = core::mem::take(root);
+        // let left be root
+        let mut left_node: Node<B> = core::mem::take(root);
+        // set left parent
+        left_node.parent = Some(root_idx);
+
+        // push left and right to root.children
         root.children = Vec::with_capacity(B::MAX_LEN);
-        let right = new_node;
-        let left = Child::new(self.nodes.insert(left), new_cache);
+        let left_children = left_node.children.clone();
+        let left_arena = self.nodes.insert(left_node);
+        let left = Child::new(left_arena, new_cache);
         let mut cache = std::mem::take(&mut self.root_cache);
         let root = self.get_mut(self.root);
         root.children.push(left);
         root.children.push(right);
+
+        // update new root cache
         root.calc_cache(&mut cache, None);
+
+        // update left's children's parent
+        for child in left_children {
+            self.get_mut(child.arena).parent = Some(left_arena);
+        }
         self.root_cache = cache;
     }
 
@@ -1239,7 +1267,6 @@ impl<B: BTreeTrait> BTree<B> {
     /// merge into or borrow from neighbor
     ///
     /// - cache should be up-to-date when calling this.
-    /// - this method will keep the arena path valid, while arr index path may change
     ///
     /// return is parent lack
     fn handle_lack(&mut self, path: &PathRef) -> bool {
@@ -1252,26 +1279,35 @@ impl<B: BTreeTrait> BTree<B> {
                 let parent = self.get_mut(path.parent().unwrap().arena);
                 let mut a_cache = std::mem::take(&mut parent.children[a_idx.arr].cache);
                 let mut b_cache = std::mem::take(&mut parent.children[b_idx.arr].cache);
+                let mut re_parent = FxHashMap::default();
 
                 let (a, b) = self.nodes.get2_mut(a_idx.arena, b_idx.arena);
                 let a = a.unwrap();
                 let b = b.unwrap();
-                if a.len() + b.len() >= B::MAX_LEN {
+                let is_lack = if a.len() + b.len() >= B::MAX_LEN {
                     // move
                     if a.len() < b.len() {
-                        // move b to a
+                        // move part of b's children to a
                         let move_len = (b.len() - a.len()) / 2;
                         if b.is_internal() {
-                            a.children.extend(b.children.drain(..move_len));
+                            for child in b.children.drain(..move_len) {
+                                re_parent.insert(child.arena, a_idx.arena);
+                                a.children.push(child);
+                            }
                         } else {
                             a.elements.extend(b.elements.drain(..move_len));
                         }
                     } else {
-                        // move a to b
+                        // move part of a's children to b
                         let move_len = (a.len() - b.len()) / 2;
                         if a.is_internal() {
-                            b.children
-                                .splice(0..0, a.children.drain(a.children.len() - move_len..));
+                            b.children.splice(
+                                0..0,
+                                a.children.drain(a.children.len() - move_len..).map(|x| {
+                                    re_parent.insert(x.arena, b_idx.arena);
+                                    x
+                                }),
+                            );
                         } else {
                             b.elements
                                 .splice(0..0, a.elements.drain(a.elements.len() - move_len..));
@@ -1288,6 +1324,9 @@ impl<B: BTreeTrait> BTree<B> {
                     if path.this() == a_idx {
                         // merge b to a, delete b
                         if a.is_internal() {
+                            for child in b.children.iter() {
+                                re_parent.insert(child.arena, a_idx.arena);
+                            }
                             a.children.append(&mut b.children);
                         } else {
                             a.elements.append(&mut b.elements);
@@ -1302,6 +1341,9 @@ impl<B: BTreeTrait> BTree<B> {
                     } else {
                         // merge a to b, delete a
                         if a.is_internal() {
+                            for child in a.children.iter() {
+                                re_parent.insert(child.arena, b_idx.arena);
+                            }
                             b.children.splice(0..0, core::mem::take(&mut a.children));
                         } else {
                             b.elements.splice(0..0, core::mem::take(&mut a.elements));
@@ -1314,7 +1356,13 @@ impl<B: BTreeTrait> BTree<B> {
                         self.purge(a_idx.arena);
                         is_lack
                     }
+                };
+
+                for (child, parent) in re_parent {
+                    let child = self.get_mut(child);
+                    child.parent = Some(parent);
                 }
+                is_lack
             }
             None => true,
         }
@@ -1327,6 +1375,8 @@ impl<B: BTreeTrait> BTree<B> {
             let child = self.nodes.remove(child_arena).unwrap();
             let root = self.get_mut(self.root);
             let _ = core::mem::replace(root, child);
+            root.parent = None;
+            // root cache should be the same as child cache because there is only one child
         }
     }
 
@@ -1505,6 +1555,7 @@ impl<B: BTreeTrait> BTree<B> {
                     let child = self.get(child_info.arena);
                     let mut cache = Default::default();
                     child.calc_cache(&mut cache, None);
+                    assert_eq!(child.parent, Some(index));
                     assert_eq!(cache, child_info.cache);
                 }
             }
