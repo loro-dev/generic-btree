@@ -1616,6 +1616,10 @@ impl<B: BTreeTrait> BTree<B> {
                     assert_eq!(cache, child_info.cache);
                 }
             }
+            if let Some(parent) = node.parent {
+                let parent = self.get(parent);
+                assert_eq!(parent.children[node.parent_slot as usize].arena, index);
+            }
 
             // FIXME: enable these checking when we have parent link
             // if index != self.root {
