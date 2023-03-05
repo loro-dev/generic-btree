@@ -38,11 +38,11 @@ flate2 = "1.0.25"
 
 
 [[bench]]
-name = "ord"
+name = "bench_ord"
 harness = false
 
 [[bench]]
-name = "rope"
+name = "bench_rope"
 harness = false
 
 [profile.release]
