@@ -77,6 +77,7 @@ pub trait UseLengthFinder<B: BTreeTrait> {
 impl<Elem: 'static, B: BTreeTrait<Elem = Elem> + UseLengthFinder<B>> Query<B> for LengthFinder {
     type QueryArg = usize;
 
+    #[inline(always)]
     fn init(target: &Self::QueryArg) -> Self {
         Self { left: *target }
     }

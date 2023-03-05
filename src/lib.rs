@@ -1478,17 +1478,24 @@ impl<B: BTreeTrait> BTree<B> {
         let mut node = self.get_mut(node_idx);
         let mut this_arr = node.parent_slot;
         let mut diff = None;
-        while node.parent.is_some() {
-            let parent_idx = node.parent.unwrap();
-            let (parent, this) = self.get2_mut(parent_idx, this_idx);
-            if can_use_diff {
+        if can_use_diff {
+            while node.parent.is_some() {
+                let parent_idx = node.parent.unwrap();
+                let (parent, this) = self.get2_mut(parent_idx, this_idx);
                 diff = Some(this.calc_cache(&mut parent.children[this_arr as usize].cache, diff));
-            } else {
-                this.calc_cache(&mut parent.children[this_arr as usize].cache, None);
+                this_idx = parent_idx;
+                this_arr = parent.parent_slot;
+                node = parent;
             }
-            this_idx = parent_idx;
-            this_arr = parent.parent_slot;
-            node = parent;
+        } else {
+            while node.parent.is_some() {
+                let parent_idx = node.parent.unwrap();
+                let (parent, this) = self.get2_mut(parent_idx, this_idx);
+                this.calc_cache(&mut parent.children[this_arr as usize].cache, None);
+                this_idx = parent_idx;
+                this_arr = parent.parent_slot;
+                node = parent;
+            }
         }
 
         let mut root_cache = std::mem::take(&mut self.root_cache);

@@ -230,11 +230,14 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         }
 
         if let Some(after) = leaf_after_drain_range {
-            self.tree.recursive_update_cache(after, false);
+            self.tree
+                .recursive_update_cache(after, leaf_after_drain_range == leaf_before_drain_range);
         }
 
         // otherwise the path is invalid (e.g. the tree is empty)
         if let Some(before) = leaf_before_drain_range {
+            self.tree
+                .recursive_update_cache(before, leaf_after_drain_range == leaf_before_drain_range);
             seal(self.tree, before);
         } else {
             self.tree.update_root_cache();
@@ -244,8 +247,6 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
 }
 
 fn seal<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIndex) {
-    // update cache
-    tree.recursive_update_cache(leaf, false);
     handle_lack_on_path_to_leaf(tree, leaf);
     if let Some(sibling) = tree.next_same_level_node(leaf) {
         handle_lack_on_path_to_leaf(tree, sibling);
@@ -255,8 +256,9 @@ fn seal<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIndex) {
 
 fn handle_lack_on_path_to_leaf<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIndex) {
     let mut last_lack_count = 0;
-    let mut lack_count = 0;
+    let mut lack_count;
     loop {
+        lack_count = 0;
         let path = tree.get_path(leaf);
         for i in 1..path.len() {
             let Some(node) = tree.nodes.get(path[i].arena) else { unreachable!() };
@@ -274,7 +276,6 @@ fn handle_lack_on_path_to_leaf<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIn
         }
 
         last_lack_count = lack_count;
-        lack_count = 0;
     }
 }
 

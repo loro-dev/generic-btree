@@ -10,7 +10,7 @@ pub struct PProfGuard {
 impl PProfGuard {
     #[must_use]
     pub fn new(name: &str) -> Self {
-        let guard = pprof::ProfilerGuard::new(1000).unwrap();
+        let guard = pprof::ProfilerGuard::new(10_000).unwrap();
         Self {
             path: name.to_string(),
             guard,
