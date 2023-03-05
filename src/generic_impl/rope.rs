@@ -76,11 +76,11 @@ impl RopeElem {
             std::ops::Bound::Excluded(&pos) => pos,
             std::ops::Bound::Unbounded => self.len(),
         };
-        self.shift_at(start);
+        self.shift_at(end);
         let mut deleted = 0;
         let len = end - start;
-        while deleted < len && !self.right.is_empty() {
-            self.right.pop();
+        while deleted < len && !self.left.is_empty() {
+            self.left.pop();
             deleted += 1;
         }
         deleted
@@ -99,16 +99,17 @@ impl RopeElem {
 
     fn split_right(&mut self, at: usize) -> Self {
         self.shift_at(at);
-        let mut next_right = take(&mut self.right);
+        let mut next_left = take(&mut self.right);
+        next_left.reverse();
         Self {
-            left: Vec::new(),
-            right: next_right,
+            left: next_left,
+            right: Vec::new(),
         }
     }
 
     fn split_left(&mut self, at: usize) -> Self {
         self.shift_at(at);
-        let mut prev_left = take(&mut self.left);
+        let prev_left = take(&mut self.left);
         Self {
             left: prev_left,
             right: Vec::new(),
@@ -2965,25 +2966,29 @@ mod test {
 
         use rand::{Rng, SeedableRng};
         let mut rng = rand::rngs::StdRng::seed_from_u64(123);
-        let data: HeapVec<u8> = (0..100_000).map(|_| rng.gen()).collect();
-        let mut gen = arbitrary::Unstructured::new(&data);
-        let actions: [Action; 10_000] = gen.arbitrary().unwrap();
+        let mut expected = String::new();
+        let unstructured: Vec<u8> = (0..10_000).map(|_| rng.gen()).collect();
+        let mut gen = arbitrary::Unstructured::new(&unstructured);
+        let actions: [Action; 1_000] = gen.arbitrary().unwrap();
         let mut rope = Rope::new();
         for action in actions.iter() {
             match *action {
                 Action::Insert { pos, content } => {
                     let pos = pos as usize % (rope.len() + 1);
                     let s = content.to_string();
+                    expected.insert_str(pos, &s);
                     rope.insert(pos, &s);
                 }
                 Action::Delete { pos, len } => {
                     let pos = pos as usize % (rope.len() + 1);
                     let mut len = len as usize % 10;
                     len = len.min(rope.len() - pos);
+                    expected.drain(pos..pos + len);
                     rope.delete_range(pos..(pos + len));
                 }
             }
         }
+        assert_eq!(rope.to_string(), expected);
     }
 
     #[test]
