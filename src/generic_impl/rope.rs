@@ -2917,6 +2917,653 @@ mod test {
     }
 
     #[test]
+    fn fuzz_7() {
+        fuzz(vec![
+            Insert {
+                pos: 111,
+                content: 111,
+            },
+            Insert { pos: 0, content: 0 },
+            Insert { pos: 0, content: 0 },
+            Insert { pos: 0, content: 0 },
+            Insert { pos: 0, content: 0 },
+            Insert { pos: 0, content: 0 },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 108,
+            },
+            Insert {
+                pos: 108,
+                content: 255,
+            },
+            Delete { pos: 255, len: 0 },
+            Insert {
+                pos: 140,
+                content: 140,
+            },
+            Insert {
+                pos: 102,
+                content: 101,
+            },
+            Insert {
+                pos: 36,
+                content: 146,
+            },
+            Insert {
+                pos: 102,
+                content: 119,
+            },
+            Insert {
+                pos: 118,
+                content: 119,
+            },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert {
+                pos: 21,
+                content: 0,
+            },
+            Insert {
+                pos: 140,
+                content: 140,
+            },
+            Insert {
+                pos: 107,
+                content: 19,
+            },
+            Insert {
+                pos: 102,
+                content: 47,
+            },
+            Insert { pos: 0, content: 0 },
+            Insert {
+                pos: 0,
+                content: 102,
+            },
+            Insert { pos: 0, content: 0 },
+            Insert {
+                pos: 0,
+                content: 102,
+            },
+            Insert {
+                pos: 102,
+                content: 64,
+            },
+            Insert {
+                pos: 64,
+                content: 64,
+            },
+            Insert {
+                pos: 64,
+                content: 64,
+            },
+            Insert {
+                pos: 64,
+                content: 64,
+            },
+            Insert {
+                pos: 64,
+                content: 64,
+            },
+            Insert {
+                pos: 64,
+                content: 64,
+            },
+            Insert {
+                pos: 64,
+                content: 64,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Delete { pos: 255, len: 136 },
+            Delete { pos: 119, len: 111 },
+            Insert {
+                pos: 102,
+                content: 102,
+            },
+            Insert {
+                pos: 3,
+                content: 73,
+            },
+            Insert {
+                pos: 146,
+                content: 74,
+            },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 0, len: 102 },
+            Insert {
+                pos: 102,
+                content: 102,
+            },
+            Insert {
+                pos: 102,
+                content: 102,
+            },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert { pos: 0, content: 0 },
+            Delete { pos: 255, len: 255 },
+            Insert { pos: 0, content: 0 },
+            Insert {
+                pos: 0,
+                content: 255,
+            },
+            Delete { pos: 111, len: 108 },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert {
+                pos: 102,
+                content: 102,
+            },
+            Insert {
+                pos: 83,
+                content: 108,
+            },
+            Insert {
+                pos: 111,
+                content: 111,
+            },
+            Insert {
+                pos: 119,
+                content: 21,
+            },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert {
+                pos: 64,
+                content: 64,
+            },
+            Insert {
+                pos: 64,
+                content: 64,
+            },
+            Insert {
+                pos: 64,
+                content: 64,
+            },
+            Insert {
+                pos: 55,
+                content: 119,
+            },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert { pos: 0, content: 0 },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 121,
+                content: 86,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Delete { pos: 130, len: 130 },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert {
+                pos: 96,
+                content: 102,
+            },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert {
+                pos: 156,
+                content: 111,
+            },
+            Insert {
+                pos: 123,
+                content: 37,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 37,
+                content: 121,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 121,
+                content: 86,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 123,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Delete { pos: 239, len: 239 },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 123,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 123,
+                content: 0,
+            },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 255, len: 255 },
+            Delete { pos: 125, len: 125 },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 125,
+                content: 125,
+            },
+            Insert {
+                pos: 123,
+                content: 123,
+            },
+            Insert {
+                pos: 118,
+                content: 118,
+            },
+            Insert {
+                pos: 255,
+                content: 255,
+            },
+            Insert {
+                pos: 119,
+                content: 119,
+            },
+            Insert {
+                pos: 102,
+                content: 102,
+            },
+            Delete { pos: 209, len: 255 },
+            Delete { pos: 255, len: 255 },
+        ])
+    }
+
+    #[test]
     fn fuzz_empty() {
         fuzz(vec![])
     }

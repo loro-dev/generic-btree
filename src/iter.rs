@@ -1,6 +1,6 @@
 use smallvec::SmallVec;
 
-use crate::{BTree, BTreeTrait, Node, NodePath, PathRef, Query, QueryResult, StackVec};
+use crate::{BTree, BTreeTrait, Node, NodePath, PathRef, Query, QueryResult};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
@@ -141,7 +141,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         let start_path = &self.start_result.node_path;
         let end_path = &self.end_result.node_path;
         let mut level = start_path.len() - 1;
-        let mut deleted: SmallVec<[_; 32]> = SmallVec::new();
+        let mut deleted = Vec::new();
         let mut zipper_left: SmallVec<[_; 16]> = SmallVec::with_capacity(start_path.len());
         let mut zipper_right: SmallVec<[_; 16]> = SmallVec::with_capacity(start_path.len());
         // TODO: formalize zipper left and zipper right and document it
@@ -158,9 +158,11 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             } else {
                 end_path[level].arr
             };
-            if start_path[level - 1].arena == end_path[level - 1].arena {
+            let start_arena = start_path[level - 1].arena;
+            let end_arena = end_path[level - 1].arena;
+            if start_arena == end_arena {
                 // parent is the same, delete start..end
-                let parent = self.tree.get_mut(start_path[level - 1].arena);
+                let parent = self.tree.get_mut(start_arena);
                 zipper_right.push(Some(del_start));
                 if del_start == 0 && del_end == parent.children.len() {
                     // if we are deleting the whole node, we need to delete the parent as well
@@ -173,6 +175,8 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
                 for x in parent.children.drain(del_start..del_end) {
                     deleted.push(x.arena);
                 }
+                self.tree
+                    .update_children_parent_slot_from(start_arena, del_start);
             } else {
                 zipper_right.push(Some(0));
                 if del_start == 0 {
@@ -186,17 +190,18 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
                 // parent is different
                 {
                     // delete start..
-                    let start_parent = self.tree.get_mut(start_path[level - 1].arena);
+                    let start_parent = self.tree.get_mut(start_arena);
                     for x in start_parent.children.drain(del_start..) {
                         deleted.push(x.arena);
                     }
                 }
                 {
                     // delete ..end
-                    let end_parent = self.tree.get_mut(end_path[level - 1].arena);
+                    let end_parent = self.tree.get_mut(end_arena);
                     for x in end_parent.children.drain(..del_end) {
                         deleted.push(x.arena);
                     }
+                    self.tree.update_children_parent_slot_from(end_arena, 0);
                 }
             }
 
@@ -220,6 +225,10 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
                     start_path[level].arena
                 );
                 deleted.push(parent.children.remove(start_path[level].arr).arena);
+                self.tree.update_children_parent_slot_from(
+                    start_path[level - 1].arena,
+                    start_path[level].arr,
+                );
             } else {
                 break;
             }
@@ -250,7 +259,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             // otherwise the path is invalid (e.g. the tree is empty)
             seal(self.tree, path);
         } else {
-            self.tree.try_shrink_levels();
+            self.tree.try_reduce_levels();
         }
     }
 }
@@ -270,7 +279,7 @@ fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: NodePath) {
         let is_lack = node.is_lack();
         let path_ref: PathRef = path[0..=i].into();
         if is_lack {
-            tree.handle_lack(&path_ref);
+            tree.handle_lack(path_ref.this().arena);
             times += 1;
             if times > 2 {
                 break;
@@ -299,11 +308,11 @@ fn seal<B: BTreeTrait>(tree: &mut BTree<B>, path: NodePath) {
         let path_ref: PathRef = sibling_path[0..=i].into();
         if is_lack {
             // FIXME: if path is invalid it will also return true
-            let _is_parent_lack = tree.handle_lack(&path_ref);
+            let _is_parent_lack = tree.handle_lack(path_ref.this().arena);
         }
     }
 
-    tree.try_shrink_levels();
+    tree.try_reduce_levels();
 }
 
 impl<'a, B: BTreeTrait> Iter<'a, B> {

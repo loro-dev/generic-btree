@@ -70,7 +70,7 @@ impl<T: Mergeable, B: BTreeTrait<Elem = T>> BTree<B> {
         let leaf_idx = path.last().unwrap();
         let leaf = self.get(leaf_idx.arena);
         if leaf.is_lack() {
-            self.handle_lack(&path.as_ref().into());
+            self.handle_lack(path.last().unwrap().arena);
             return true;
         }
 
@@ -82,7 +82,7 @@ impl<T: Mergeable, B: BTreeTrait<Elem = T>> BTree<B> {
         let next_idx = sibling_path.last().unwrap();
         let next = self.get(next_idx.arena);
         if next.is_lack() {
-            self.handle_lack(&sibling_path.as_ref().into());
+            self.handle_lack(sibling_path.last().unwrap().arena);
             return true;
         }
 
@@ -104,7 +104,7 @@ impl<T: Mergeable, B: BTreeTrait<Elem = T>> BTree<B> {
             }
 
             if a.is_lack() {
-                self.handle_lack(&path.as_ref().into());
+                self.handle_lack(path.last().unwrap().arena);
                 return true;
             }
         }
