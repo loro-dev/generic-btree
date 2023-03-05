@@ -603,19 +603,20 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    pub fn delete<Q>(&mut self, query: &Q::QueryArg) -> bool
+    pub fn delete<Q>(&mut self, query: &Q::QueryArg) -> Option<B::Elem>
     where
         Q: Query<B>,
     {
         let result = self.query::<Q>(query);
         if !result.found {
-            return false;
+            return None;
         }
 
         let index = *result.node_path.last().unwrap();
         let node = self.nodes.get_mut(index.arena).unwrap();
+        let mut ans = None;
         if result.found {
-            Q::delete(&mut node.elements, query, result.elem_index, result.offset);
+            ans = Q::delete(&mut node.elements, query, result.elem_index, result.offset);
         }
 
         let is_full = node.is_full();
@@ -631,7 +632,7 @@ impl<B: BTreeTrait> BTree<B> {
 
             self.try_shrink_levels()
         }
-        true
+        ans
     }
 
     #[inline]
@@ -1208,6 +1209,7 @@ impl<B: BTreeTrait> BTree<B> {
     fn split_root(&mut self, new_cache: B::Cache, new_node: Child<B>) {
         let root = self.get_mut(self.root);
         let left: Node<B> = core::mem::take(root);
+        root.children = Vec::with_capacity(B::MAX_LEN);
         let right = new_node;
         let left = Child::new(self.nodes.insert(left), new_cache);
         let mut cache = std::mem::take(&mut self.root_cache);

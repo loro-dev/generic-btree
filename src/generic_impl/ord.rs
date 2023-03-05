@@ -3,14 +3,16 @@ use core::fmt::Debug;
 use crate::{BTree, BTreeTrait, FindResult, Query};
 
 #[derive(Debug)]
+#[repr(transparent)]
 struct OrdTrait<Key, Value> {
     _phantom: core::marker::PhantomData<(Key, Value)>,
 }
 
 #[derive(Debug)]
-pub struct OrdTreeMap<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug>(
-    BTree<OrdTrait<Key, Value>>,
-);
+pub struct OrdTreeMap<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> {
+    tree: BTree<OrdTrait<Key, Value>>,
+    len: usize,
+}
 
 #[derive(Debug)]
 pub struct OrdTreeSet<Key: Clone + Ord + Debug + 'static>(OrdTreeMap<Key, ()>);
@@ -18,34 +20,61 @@ pub struct OrdTreeSet<Key: Clone + Ord + Debug + 'static>(OrdTreeMap<Key, ()>);
 impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTreeMap<Key, Value> {
     #[inline(always)]
     pub fn new() -> Self {
-        Self(BTree::new())
-    }
-
-    #[inline(always)]
-    pub fn insert(&mut self, key: Key, value: Value) {
-        let result = self.0.query::<OrdTrait<Key, Value>>(&key);
-        if !result.found {
-            self.0.insert_by_query_result(result, (key, value));
+        Self {
+            tree: BTree::new(),
+            len: 0,
         }
     }
 
     #[inline(always)]
-    pub fn delete(&mut self, value: &Key) -> bool {
-        self.0.delete::<OrdTrait<Key, Value>>(value)
+    pub fn insert(&mut self, key: Key, value: Value) {
+        let result = self.tree.query::<OrdTrait<Key, Value>>(&key);
+        if !result.found {
+            self.len += 1;
+            self.tree.insert_by_query_result(result, (key, value));
+        } else {
+            let leaf = self
+                .tree
+                .nodes
+                .get_mut(result.node_path.last().unwrap().arena)
+                .unwrap();
+            leaf.elements[result.elem_index].1 = value;
+        }
+    }
+
+    #[inline(always)]
+    pub fn delete(&mut self, value: &Key) -> Option<(Key, Value)> {
+        match self.tree.delete::<OrdTrait<Key, Value>>(value) {
+            Some(v) => {
+                self.len -= 1;
+                Some(v)
+            }
+            None => None,
+        }
     }
 
     #[inline(always)]
     pub fn iter(&self) -> impl Iterator<Item = &(Key, Value)> {
-        self.0.iter()
+        self.tree.iter()
     }
 
     #[inline(always)]
     pub fn iter_key(&self) -> impl Iterator<Item = &Key> {
-        self.0.iter().map(|x| &x.0)
+        self.tree.iter().map(|x| &x.0)
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     pub(crate) fn check(&self) {
-        self.0.check()
+        self.tree.check()
     }
 }
 
@@ -62,12 +91,24 @@ impl<Key: Clone + Ord + Debug + 'static> OrdTreeSet<Key> {
 
     #[inline(always)]
     pub fn delete(&mut self, key: &Key) -> bool {
-        self.0.delete(key)
+        self.0.delete(key).is_some()
     }
 
     #[inline(always)]
     pub fn iter(&self) -> impl Iterator<Item = &Key> {
         self.0.iter_key()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.len == 0
+    }
+
+    fn check(&self) {
+        self.0.check()
     }
 }
 
@@ -101,7 +142,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
     type WriteBuffer = ();
     type Cache = Option<(Key, Key)>;
 
-    const MAX_LEN: usize = 12;
+    const MAX_LEN: usize = 32;
 
     #[inline(always)]
     fn element_to_cache(_: &Self::Elem) -> Self::Cache {
@@ -144,17 +185,19 @@ impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug + 'static> Query<O
         target: &Self::QueryArg,
         child_caches: &[crate::Child<OrdTrait<Key, Value>>],
     ) -> crate::FindResult {
-        for (i, child) in child_caches.iter().enumerate() {
-            let (min, max) = child.cache.as_ref().unwrap();
+        match child_caches.binary_search_by(|x| {
+            let (min, max) = x.cache.as_ref().unwrap();
             if target < min {
-                return FindResult::new_missing(i, 0);
+                core::cmp::Ordering::Greater
+            } else if target > max {
+                core::cmp::Ordering::Less
+            } else {
+                core::cmp::Ordering::Equal
             }
-            if target >= min && target <= max {
-                return FindResult::new_found(i, 0);
-            }
+        }) {
+            Ok(i) => FindResult::new_found(i, 0),
+            Err(i) => FindResult::new_missing(i, 0),
         }
-
-        FindResult::new_missing(child_caches.len(), 0)
     }
 
     fn find_element(&mut self, target: &Key, elements: &[(Key, Value)]) -> crate::FindResult {
@@ -164,6 +207,7 @@ impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug + 'static> Query<O
         }
     }
 
+    #[inline(always)]
     fn init(_target: &Self::QueryArg) -> Self {
         Self::default()
     }
@@ -181,12 +225,13 @@ mod test {
     fn test() {
         let mut tree: OrdTreeSet<u64> = OrdTreeSet::new();
         let mut rng = rand::rngs::StdRng::seed_from_u64(123);
-        let mut data: HeapVec<u64> = (0..100).map(|_| rng.gen()).collect();
+        let mut data: HeapVec<u64> = (0..1000).map(|_| rng.gen()).collect();
         for &value in data.iter() {
             tree.insert(value);
         }
         data.sort_unstable();
         assert_eq!(tree.iter().copied().collect::<HeapVec<_>>(), data);
+        tree.check();
     }
 
     #[test]
@@ -194,5 +239,6 @@ mod test {
         let mut tree: OrdTreeSet<u64> = OrdTreeSet::new();
         tree.insert(12);
         tree.delete(&12);
+        assert_eq!(tree.len(), 0);
     }
 }
