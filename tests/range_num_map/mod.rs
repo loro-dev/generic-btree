@@ -245,17 +245,17 @@ impl BTreeTrait for RangeNumMapTrait {
         cache: &mut Self::Cache,
         caches: &[generic_btree::Child<Self>],
         diff: Option<isize>,
-    ) -> isize {
+    ) -> Option<isize> {
         match diff {
             Some(diff) => {
                 *cache = (*cache as isize + diff) as usize;
-                diff
+                Some(diff)
             }
             None => {
                 let new_cache = caches.iter().map(|c| c.cache).sum();
                 let diff = new_cache as isize - *cache as isize;
                 *cache = new_cache;
-                diff
+                Some(diff)
             }
         }
     }

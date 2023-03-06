@@ -146,11 +146,16 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
     }
 
     #[inline(always)]
-    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[crate::Child<Self>], _: Option<()>) {
+    fn calc_cache_internal(
+        cache: &mut Self::Cache,
+        caches: &[crate::Child<Self>],
+        _: Option<()>,
+    ) -> Option<()> {
         *cache = Some((
             caches[0].cache.as_ref().unwrap().0.clone(),
             caches[caches.len() - 1].cache.as_ref().unwrap().1.clone(),
         ));
+        None
     }
 
     #[inline(always)]

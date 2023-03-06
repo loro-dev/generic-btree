@@ -83,11 +83,12 @@ pub trait BTreeTrait {
         unimplemented!()
     }
 
+    /// If diff.is_some, return value should be some too
     fn calc_cache_internal(
         cache: &mut Self::Cache,
         caches: &[Child<Self>],
         diff: Option<Self::CacheDiff>,
-    ) -> Self::CacheDiff;
+    ) -> Option<Self::CacheDiff>;
     fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) -> Self::CacheDiff;
     fn merge_cache_diff(diff1: &mut Self::CacheDiff, diff2: &Self::CacheDiff);
 }
@@ -503,11 +504,11 @@ impl<B: BTreeTrait> Node<B> {
 
     /// if diff is not provided, the cache will be calculated from scratch
     #[inline(always)]
-    fn calc_cache(&self, cache: &mut B::Cache, diff: Option<B::CacheDiff>) -> B::CacheDiff {
+    fn calc_cache(&self, cache: &mut B::Cache, diff: Option<B::CacheDiff>) -> Option<B::CacheDiff> {
         if self.is_internal() {
             B::calc_cache_internal(cache, &self.children, diff)
         } else {
-            B::calc_cache_leaf(cache, &self.elements)
+            Some(B::calc_cache_leaf(cache, &self.elements))
         }
     }
 }
@@ -1069,9 +1070,9 @@ impl<B: BTreeTrait> BTree<B> {
                     child.calc_cache(&mut parent.children[arr].cache, diff_map.remove(&arena));
 
                 if let Some(e) = diff_map.get_mut(&parent_idx) {
-                    B::merge_cache_diff(e, &cache_diff);
+                    B::merge_cache_diff(e, &cache_diff.unwrap());
                 } else {
-                    diff_map.insert(parent_idx, cache_diff);
+                    diff_map.insert(parent_idx, cache_diff.unwrap());
                 }
             }
         }
@@ -1557,7 +1558,7 @@ impl<B: BTreeTrait> BTree<B> {
             while node.parent.is_some() {
                 let parent_idx = node.parent.unwrap();
                 let (parent, this) = self.get2_mut(parent_idx, this_idx);
-                diff = Some(this.calc_cache(&mut parent.children[this_arr as usize].cache, diff));
+                diff = this.calc_cache(&mut parent.children[this_arr as usize].cache, diff);
                 this_idx = parent_idx;
                 this_arr = parent.parent_slot;
                 node = parent;
