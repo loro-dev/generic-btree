@@ -42,7 +42,7 @@ pub type HeapVec<T> = Vec<T>;
 pub trait BTreeTrait {
     type Elem: Debug;
     type Cache: Debug + Default + Clone + Eq;
-    type CacheDiff;
+    type CacheDiff: Debug;
     /// Use () if you don't need write buffer.
     /// Associated type default is still unstable so we don't provide default value.
     type WriteBuffer: Debug + Clone;
@@ -147,11 +147,11 @@ pub trait Query<B: BTreeTrait> {
 }
 
 pub struct BTree<B: BTreeTrait> {
-    nodes: Arena<Node<B>>,
-    root: ArenaIndex,
-    root_cache: B::Cache,
+    pub nodes: Arena<Node<B>>,
+    pub root: ArenaIndex,
+    pub root_cache: B::Cache,
     /// this field turn true when things written into write buffer
-    need_flush: bool,
+    pub need_flush: bool,
 }
 
 impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
@@ -254,7 +254,7 @@ impl<'a> PathRef<'a> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub struct QueryResult {
     pub leaf: ArenaIndex,
     pub elem_index: usize,
@@ -303,7 +303,7 @@ impl QueryResult {
 }
 
 // TODO: use enum to save spaces
-struct Node<B: BTreeTrait> {
+pub struct Node<B: BTreeTrait> {
     parent: Option<ArenaIndex>,
     parent_slot: u32,
     elements: HeapVec<B::Elem>,
@@ -719,7 +719,7 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     #[inline]
-    pub fn get_elem(&mut self, q: QueryResult) -> Option<&B::Elem> {
+    pub fn get_elem(&mut self, q: &QueryResult) -> Option<&B::Elem> {
         if !q.found {
             return None;
         }
@@ -729,6 +729,19 @@ impl<B: BTreeTrait> BTree<B> {
         let index = q.leaf;
         let node = self.nodes.get(index)?;
         node.elements.get(q.elem_index)
+    }
+
+    #[inline]
+    pub fn get_elem_mut(&mut self, q: &QueryResult) -> Option<&mut B::Elem> {
+        if !q.found {
+            return None;
+        }
+
+        let path = self.get_path(q.leaf);
+        self.flush_path(PathRef::from(&path));
+        let index = q.leaf;
+        let node = self.nodes.get_mut(index)?;
+        node.elements.get_mut(q.elem_index)
     }
 
     pub fn drain<Q>(&mut self, range: Range<Q::QueryArg>) -> iter::Drain<B, Q>
@@ -863,6 +876,68 @@ impl<B: BTreeTrait> BTree<B> {
             self.update_dirty_cache_map(dirty_map);
         } else {
             self.update_root_cache();
+        }
+    }
+
+    /// update leaf node's elements, return true if cache need to be updated
+    pub fn update_leaf(&mut self, node_idx: ArenaIndex, f: impl FnOnce(&mut Vec<B::Elem>) -> bool) {
+        let node = self.nodes.get_mut(node_idx).unwrap();
+        assert!(node.is_leaf());
+        let need_update_cache = f(&mut node.elements);
+        let is_full = node.is_full();
+        let is_lack = node.is_lack();
+        if need_update_cache {
+            self.recursive_update_cache(node_idx, true);
+        }
+        if is_full {
+            self.split(node_idx);
+        }
+        if is_lack {
+            self.handle_lack(node_idx);
+        }
+    }
+
+    pub fn update2_leaf(
+        &mut self,
+        a_idx: ArenaIndex,
+        b_idx: ArenaIndex,
+        mut f: impl FnMut(&mut Vec<B::Elem>, Option<ArenaIndex>) -> bool,
+    ) {
+        let node = self.nodes.get_mut(a_idx).unwrap();
+        assert!(node.is_leaf());
+        let need_update_cache = f(
+            &mut node.elements,
+            if a_idx == b_idx { None } else { Some(a_idx) },
+        );
+        let is_full = node.is_full();
+        let is_lack = node.is_lack();
+        let (b_full, b_lack) = if b_idx != a_idx {
+            let node = self.nodes.get_mut(b_idx).unwrap();
+            assert!(node.is_leaf());
+            let need_update_cache = f(&mut node.elements, Some(b_idx));
+            let is_full = node.is_full();
+            let is_lack = node.is_lack();
+            if need_update_cache {
+                self.recursive_update_cache(b_idx, true);
+            }
+            (is_full, is_lack)
+        } else {
+            (false, false)
+        };
+        if need_update_cache {
+            self.recursive_update_cache(a_idx, true);
+        }
+        if is_full {
+            self.split(a_idx);
+        }
+        if b_full {
+            self.split(b_idx);
+        }
+        if is_lack {
+            self.handle_lack(a_idx);
+        }
+        if b_lack {
+            self.handle_lack(b_idx);
         }
     }
 
@@ -1473,7 +1548,7 @@ impl<B: BTreeTrait> BTree<B> {
 
     /// Sometimes we cannot use diff because no only the given node is changed, but also its siblings.
     /// For example, after delete a range of nodes, we cannot use the diff from child to infer the diff of parent.
-    fn recursive_update_cache(&mut self, node_idx: ArenaIndex, can_use_diff: bool) {
+    pub fn recursive_update_cache(&mut self, node_idx: ArenaIndex, can_use_diff: bool) {
         let mut this_idx = node_idx;
         let mut node = self.get_mut(node_idx);
         let mut this_arr = node.parent_slot;
@@ -1545,7 +1620,7 @@ impl<B: BTreeTrait> BTree<B> {
         true
     }
 
-    fn next_same_level_node(&self, node_idx: ArenaIndex) -> Option<ArenaIndex> {
+    pub fn next_same_level_node(&self, node_idx: ArenaIndex) -> Option<ArenaIndex> {
         let node = self.get(node_idx);
         let parent = self.get(node.parent?);
         if let Some(next) = parent.children.get(node.parent_slot as usize + 1) {
@@ -1558,7 +1633,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn prev_same_level_node(&self, node_idx: ArenaIndex) -> Option<ArenaIndex> {
+    pub fn prev_same_level_node(&self, node_idx: ArenaIndex) -> Option<ArenaIndex> {
         let node = self.get(node_idx);
         let parent = self.get(node.parent?);
         if node.parent_slot > 0 {

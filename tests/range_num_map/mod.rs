@@ -60,7 +60,7 @@ impl RangeNumMap {
 
     pub fn get(&mut self, index: usize) -> Option<isize> {
         let result = self.0.query::<LengthFinder>(&index);
-        self.0.get_elem(result).and_then(|x| x.value)
+        self.0.get_elem(&result).and_then(|x| x.value)
     }
 
     pub fn iter(&mut self) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
