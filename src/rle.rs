@@ -15,6 +15,7 @@ pub trait Sliceable<T = usize>: HasLength<T> {
 }
 
 pub trait Mergeable {
+    /// this is not symmetric
     fn can_merge(&self, rhs: &Self) -> bool;
     fn merge_right(&mut self, rhs: &Self);
     fn merge_left(&mut self, left: &Self);
@@ -320,7 +321,7 @@ pub fn insert_with_split<T: Sliceable + Mergeable>(
     assert!(index < elements.len());
     if offset == 0 {
         let target = elements.get_mut(index).unwrap();
-        if target.can_merge(&elem) {
+        if elem.can_merge(target) {
             target.merge_left(&elem);
         } else {
             elements.insert(index, elem);
