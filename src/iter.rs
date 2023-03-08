@@ -142,7 +142,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         let mut deleted = Vec::new();
         let leaf_before_drain_range = {
             let node_idx = start_path[level].arena;
-            let node = self.tree.get(node_idx);
+            let node = self.tree.get_node(node_idx);
             if node.is_empty() {
                 self.tree.prev_same_level_node(node_idx)
             } else {
@@ -151,7 +151,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         };
         let leaf_after_drain_range = {
             let node_idx = end_path[level].arena;
-            let node = self.tree.get(node_idx);
+            let node = self.tree.get_node(node_idx);
             if node.is_empty() {
                 self.tree.next_same_level_node(node_idx)
             } else {
@@ -159,8 +159,8 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             }
         };
         while start_path[level].arena != end_path[level].arena {
-            let start_node = self.tree.get(start_path[level].arena);
-            let end_node = self.tree.get(end_path[level].arena);
+            let start_node = self.tree.get_node(start_path[level].arena);
+            let end_node = self.tree.get_node(end_path[level].arena);
             let del_start = if start_node.is_empty() {
                 start_path[level].arr
             } else {
@@ -308,7 +308,7 @@ impl<'a, B: BTreeTrait> Iterator for Iter<'a, B> {
             self.done = true;
         }
 
-        let node = self.tree.get(last.arena);
+        let node = self.tree.get_node(last.arena);
         Some((path, node))
     }
 }

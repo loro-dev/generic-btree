@@ -141,11 +141,6 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
     const MAX_LEN: usize = 32;
 
     #[inline(always)]
-    fn element_to_cache(_: &Self::Elem) -> Self::Cache {
-        None
-    }
-
-    #[inline(always)]
     fn calc_cache_internal(
         cache: &mut Self::Cache,
         caches: &[crate::Child<Self>],

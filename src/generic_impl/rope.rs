@@ -467,10 +467,6 @@ impl BTreeTrait for RopeTrait {
 
     const MAX_LEN: usize = 32;
 
-    fn element_to_cache(_: &Self::Elem) -> Self::Cache {
-        1
-    }
-
     fn calc_cache_internal(
         cache: &mut Self::Cache,
         caches: &[crate::Child<Self>],

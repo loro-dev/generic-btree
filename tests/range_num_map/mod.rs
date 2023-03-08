@@ -237,10 +237,6 @@ impl BTreeTrait for RangeNumMapTrait {
 
     const MAX_LEN: usize = 8;
 
-    fn element_to_cache(element: &Self::Elem) -> Self::Cache {
-        element.len
-    }
-
     fn calc_cache_internal(
         cache: &mut Self::Cache,
         caches: &[generic_btree::Child<Self>],
