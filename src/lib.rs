@@ -30,8 +30,10 @@ use fxhash::FxHashMap;
 use smallvec::SmallVec;
 use thunderdome::Arena;
 pub use thunderdome::Index as ArenaIndex;
+mod event;
 mod generic_impl;
 mod iter;
+pub use event::{MoveEvent, MoveListener};
 pub use generic_impl::*;
 
 use crate::rle::HasLength;
@@ -153,6 +155,7 @@ pub struct BTree<B: BTreeTrait> {
     root_cache: B::Cache,
     /// this field turn true when things written into write buffer
     need_flush: bool,
+    element_move_listener: Option<MoveListener<B::Elem>>,
 }
 
 impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
@@ -163,6 +166,7 @@ impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
             root: self.root,
             root_cache: self.root_cache.clone(),
             need_flush: false,
+            element_move_listener: None,
         }
     }
 }
@@ -270,7 +274,9 @@ pub struct QueryResult {
 #[derive(Debug)]
 pub struct MutElemArrSlice<'a, Elem> {
     pub elements: &'a mut HeapVec<Elem>,
+    /// start is Some((start_index, start_offset)) when the slice is the first slice of the given range. i.e. the first element should be sliced.
     pub start: Option<(usize, usize)>,
+    /// end is Some((end_index, end_offset))     when the slice is the last  slice of the given range. i.e. the last  element should be sliced.
     pub end: Option<(usize, usize)>,
 }
 
@@ -533,7 +539,23 @@ impl<B: BTreeTrait> BTree<B> {
             root,
             root_cache: B::Cache::default(),
             need_flush: false,
+            element_move_listener: None,
         }
+    }
+
+    /// Register/Unregister an element move event listener.
+    ///
+    /// This is called when a element is moved from one leaf node to another.
+    /// It could happen when:
+    ///
+    /// - Leaf node split
+    /// - Leaf nodes merge
+    /// - Elements moving from one leaf node to another to keep the balance of the BTree
+    ///
+    /// It's useful when you try to track an element's position in the BTree.
+    #[inline]
+    pub fn set_listener(&mut self, listener: Option<MoveListener<B::Elem>>) {
+        self.element_move_listener = listener;
     }
 
     #[inline]
@@ -541,6 +563,7 @@ impl<B: BTreeTrait> BTree<B> {
         self.nodes.len()
     }
 
+    #[inline]
     pub fn insert<Q>(&mut self, tree_index: &Q::QueryArg, data: B::Elem)
     where
         Q: Query<B>,
@@ -550,8 +573,10 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     /// It will invoke [`BTreeTrait::insert`]
+    #[inline]
     pub fn insert_by_query_result(&mut self, result: QueryResult, data: B::Elem) {
         let index = result.leaf;
+        self.notify_elem_move(index, &data);
         let node = self.nodes.get_mut(index).unwrap();
         B::insert(&mut node.elements, result.elem_index, result.offset, data);
         let is_full = node.is_full();
@@ -628,6 +653,11 @@ impl<B: BTreeTrait> BTree<B> {
         let mut ans = None;
         if result.found {
             ans = Q::delete(&mut node.elements, query, result.elem_index, result.offset);
+            if let Some(ans) = &ans {
+                if let Some(listener) = self.element_move_listener.as_ref() {
+                    listener(MoveEvent::new_del(ans));
+                }
+            }
         }
 
         let is_full = node.is_full();
@@ -1300,7 +1330,7 @@ impl<B: BTreeTrait> BTree<B> {
         let node = self.nodes.get_mut(node_idx).unwrap();
         let node_parent = node.parent;
         let node_parent_slot = node.parent_slot;
-        let mut right: Node<B> = Node {
+        let right: Node<B> = Node {
             parent: node.parent,
             parent_slot: u32::MAX,
             elements: Vec::new(),
@@ -1308,13 +1338,14 @@ impl<B: BTreeTrait> BTree<B> {
         };
 
         let mut right_children = Vec::new();
+        let mut right_elements = Vec::new();
         // split
         if node.is_internal() {
             let split = node.children.len() / 2;
             right_children = node.children.split_off(split);
         } else {
             let split = node.elements.len() / 2;
-            right.elements = node.elements.split_off(split);
+            right_elements = node.elements.split_off(split);
         }
 
         // update cache
@@ -1329,16 +1360,28 @@ impl<B: BTreeTrait> BTree<B> {
             node.calc_cache(&mut cache, None);
             cache
         };
+
         if !right_children.is_empty() {
+            // update children's parent info
             for (i, child) in right_children.iter().enumerate() {
                 let child = self.get_mut(child.arena);
                 child.parent = Some(right_arena_idx);
                 child.parent_slot = i as u32;
             }
-            let right = self.get_mut(right_arena_idx);
-            right.children = right_children;
-            right.calc_cache(&mut right_cache, None);
         }
+        let right = self.nodes.get_mut(right_arena_idx).unwrap();
+        if !right_elements.is_empty() {
+            if let Some(listener) = self.element_move_listener.as_mut() {
+                for elem in right_elements.iter() {
+                    listener((right_arena_idx, elem).into());
+                }
+            }
+        }
+
+        right.elements = right_elements;
+        right.children = right_children;
+        // update parent cache
+        right.calc_cache(&mut right_cache, None);
 
         self.inner_insert_node(
             node_parent,
@@ -1414,10 +1457,22 @@ impl<B: BTreeTrait> BTree<B> {
         // update new root cache
         root.calc_cache(&mut cache, None);
 
-        // update left's children's parent
-        for child in left_children {
-            self.get_mut(child.arena).parent = Some(left_arena);
+        if left_children.is_empty() {
+            // leaf node
+            let left = self.nodes.get(left_arena).unwrap();
+            debug_assert!(left.is_leaf());
+            if let Some(listener) = self.element_move_listener.as_mut() {
+                for elem in left.elements.iter() {
+                    listener((left_arena, elem).into());
+                }
+            }
+        } else {
+            // update left's children's parent
+            for child in left_children {
+                self.get_mut(child.arena).parent = Some(left_arena);
+            }
         }
+
         self.root_cache = cache;
     }
 
@@ -1437,7 +1492,12 @@ impl<B: BTreeTrait> BTree<B> {
         self.nodes.get(index).unwrap()
     }
 
-    /// merge into or borrow from neighbor
+    /// The given node is lack of children/elements.
+    /// We should merge it into its neighbor or borrow from its neighbor.
+    ///
+    /// Given a random neighbor is neither full or lack, it's guaranteed
+    /// that we can either merge into or borrow from it without breaking
+    /// the balance rule.
     ///
     /// - cache should be up-to-date when calling this.
     ///
@@ -1476,6 +1536,11 @@ impl<B: BTreeTrait> BTree<B> {
                             for (i, child) in b.children.iter().enumerate() {
                                 re_parent.insert(child.arena, (b_idx.arena, i));
                             }
+                        } else if let Some(listener) = self.element_move_listener.as_ref() {
+                            a.elements.extend(b.elements.drain(..move_len).map(|x| {
+                                listener((a_idx.arena, &x).into());
+                                x
+                            }));
                         } else {
                             a.elements.extend(b.elements.drain(..move_len));
                         }
@@ -1495,6 +1560,14 @@ impl<B: BTreeTrait> BTree<B> {
                                         re_parent.insert(x.arena, (b_idx.arena, i));
                                         x
                                     }),
+                            );
+                        } else if let Some(listener) = self.element_move_listener.as_ref() {
+                            b.elements.splice(
+                                0..0,
+                                a.elements.drain(a.elements.len() - move_len..).map(|x| {
+                                    listener((b_idx.arena, &x).into());
+                                    x
+                                }),
                             );
                         } else {
                             b.elements
@@ -1519,6 +1592,16 @@ impl<B: BTreeTrait> BTree<B> {
                             }
                             a.children.append(&mut b.children);
                         } else {
+                            {
+                                // notify element move
+                                let leaf = a_idx.arena;
+                                let elements: &[B::Elem] = &b.elements;
+                                if let Some(listener) = self.element_move_listener.as_ref() {
+                                    for elem in elements.iter() {
+                                        listener((leaf, elem).into());
+                                    }
+                                }
+                            }
                             a.elements.append(&mut b.elements);
                         }
                         a.calc_cache(&mut a_cache, None);
@@ -1540,6 +1623,16 @@ impl<B: BTreeTrait> BTree<B> {
                             }
                             b.children.splice(0..0, core::mem::take(&mut a.children));
                         } else {
+                            {
+                                // notify element move
+                                let leaf = b_idx.arena;
+                                let elements: &[B::Elem] = &a.elements;
+                                if let Some(listener) = self.element_move_listener.as_ref() {
+                                    for elem in elements.iter() {
+                                        listener((leaf, elem).into());
+                                    }
+                                }
+                            }
                             b.elements.splice(0..0, core::mem::take(&mut a.elements));
                         }
                         b.calc_cache(&mut b_cache, None);
@@ -1581,14 +1674,23 @@ impl<B: BTreeTrait> BTree<B> {
             // root cache should be the same as child cache because there is only one child
         }
         if reduced {
+            let root_idx = self.root;
             let root = self.get_mut(self.root);
             root.parent = None;
             root.parent_slot = u32::MAX;
-            let children = root.children.clone();
-            let root_idx = self.root;
-            for child in children {
-                let child = self.get_mut(child.arena);
-                child.parent = Some(root_idx);
+            if root.is_internal() {
+                let children = root.children.clone();
+                for child in children {
+                    let child = self.get_mut(child.arena);
+                    child.parent = Some(root_idx);
+                }
+            } else {
+                let root = self.get_node(root_idx);
+                if let Some(listener) = self.element_move_listener.as_ref() {
+                    for elem in root.elements.iter() {
+                        listener((root_idx, elem).into());
+                    }
+                }
             }
         }
     }
@@ -1648,8 +1750,16 @@ impl<B: BTreeTrait> BTree<B> {
         let mut stack: SmallVec<[_; 64]> = smallvec::smallvec![index];
         while let Some(x) = stack.pop() {
             let Some(node) = self.nodes.get(x) else { continue };
-            for x in node.children.iter() {
-                stack.push(x.arena);
+            if node.is_leaf() {
+                if let Some(listener) = &mut self.element_move_listener {
+                    for elem in node.elements.iter() {
+                        listener(MoveEvent::new_del(elem));
+                    }
+                }
+            } else {
+                for x in node.children.iter() {
+                    stack.push(x.arena);
+                }
             }
             self.nodes.remove(x);
         }
@@ -1816,6 +1926,23 @@ impl<B: BTreeTrait> BTree<B> {
         self.recursive_update_cache(leaf_idx, true);
         if is_full {
             self.split(leaf_idx);
+        }
+    }
+
+    #[inline]
+    /// This method only works when [`MoveListener`] listener is registered
+    pub fn notify_batch_move(&self, leaf: ArenaIndex, elements: &[B::Elem]) {
+        if let Some(listener) = self.element_move_listener.as_ref() {
+            for elem in elements.iter() {
+                listener((leaf, elem).into());
+            }
+        }
+    }
+
+    #[inline]
+    pub fn notify_elem_move(&self, leaf: ArenaIndex, elem: &B::Elem) {
+        if let Some(listener) = self.element_move_listener.as_ref() {
+            listener((leaf, elem).into());
         }
     }
 }

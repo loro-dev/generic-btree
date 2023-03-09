@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 
-use crate::{BTree, BTreeTrait, FindResult, Query};
+use crate::{BTree, BTreeTrait, FindResult, MoveListener, Query};
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -47,6 +47,10 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
             }
             None => None,
         }
+    }
+
+    pub fn set_listener(&mut self, listener: Option<MoveListener<(Key, Value)>>) {
+        self.tree.set_listener(listener);
     }
 
     #[inline(always)]
@@ -236,5 +240,82 @@ mod test {
         tree.insert(12);
         tree.delete(&12);
         assert_eq!(tree.len(), 0);
+    }
+
+    mod move_event_test {
+        use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+        use thunderdome::Index as ArenaIndex;
+
+        use super::*;
+        #[test]
+        fn test() {
+            let mut tree: OrdTreeMap<u64, usize> = OrdTreeMap::new();
+            let record: Rc<RefCell<HashMap<u64, ArenaIndex>>> = Default::default();
+            let mut rng = rand::rngs::StdRng::seed_from_u64(123);
+            let mut data: HeapVec<u64> = (0..1000).map(|_| rng.gen()).collect();
+            let record_clone = record.clone();
+            tree.set_listener(Some(Box::new(move |event| {
+                if let Some(leaf) = event.target_leaf {
+                    let mut record = record.borrow_mut();
+                    record.insert(event.elem.0, leaf);
+                } else {
+                    let mut record = record.borrow_mut();
+                    record.remove(&event.elem.0);
+                }
+            })));
+            for &value in data.iter() {
+                tree.insert(value, 0);
+            }
+            {
+                let record = record_clone.borrow();
+                assert_eq!(record.len(), 1000);
+                for &value in data.iter() {
+                    let index = record.get(&value).unwrap();
+                    let node = tree.tree.get_node(*index);
+                    assert!(node.elements.iter().any(|x| x.0 == value));
+                }
+            }
+            for value in data.drain(0..100) {
+                tree.delete(&value);
+            }
+            {
+                let record = record_clone.borrow();
+                assert_eq!(record.len(), 900);
+                assert_eq!(tree.len, 900);
+                for &value in data.iter() {
+                    let index = record.get(&value).unwrap();
+                    let node = tree.tree.get_node(*index);
+                    assert!(node.elements.iter().any(|x| x.0 == value));
+                }
+            }
+            for value in data.drain(0..800) {
+                tree.delete(&value);
+            }
+            {
+                let record = record_clone.borrow();
+                assert_eq!(record.len(), 100);
+                assert_eq!(tree.len, 100);
+                for &value in data.iter() {
+                    let index = record.get(&value).unwrap();
+                    let node = tree.tree.get_node(*index);
+                    assert!(node.elements.iter().any(|x| x.0 == value));
+                }
+            }
+            tree.tree.check();
+            for i in (0..100).rev() {
+                tree.delete(&data.pop().unwrap());
+                {
+                    let record = record_clone.borrow();
+                    assert_eq!(record.len(), i);
+                    assert_eq!(tree.len, i);
+                    for &value in data.iter() {
+                        let index = record.get(&value).unwrap();
+                        let node = tree.tree.get_node(*index);
+                        assert!(node.elements.iter().any(|x| x.0 == value));
+                    }
+                }
+            }
+        }
     }
 }

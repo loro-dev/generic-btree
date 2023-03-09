@@ -1,6 +1,6 @@
 use thunderdome::Index as ArenaIndex;
 
-use crate::{BTree, BTreeTrait, Node, NodePath, Query, QueryResult};
+use crate::{BTree, BTreeTrait, MoveEvent, Node, NodePath, Query, QueryResult};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
@@ -67,12 +67,12 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
 
             let node = self.tree.get_mut(idx.arena);
             let start = if idx.arena == self.start_result.leaf {
-                Some(self.start_result.clone())
+                Some(self.start_result)
             } else {
                 None
             };
             let end = if idx.arena == self.end_result.leaf {
-                Some(self.end_result.clone())
+                Some(self.end_result)
             } else {
                 None
             };
@@ -86,6 +86,12 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
             );
             for x in iter {
                 self.reversed_elements.push(x);
+            }
+
+            if let Some(listener) = self.tree.element_move_listener.as_ref() {
+                for elem in self.reversed_elements.iter() {
+                    listener(MoveEvent::new_del(elem));
+                }
             }
             self.reversed_elements.reverse();
         }
@@ -101,16 +107,12 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
         let idx = *self.current_path.last().unwrap();
         let node = self.tree.get_mut(idx.arena);
         let start = if idx.arena == self.start_result.leaf {
-            Some(self.start_result.clone())
+            Some(self.start_result)
         } else {
             None
         };
         let is_last = idx.arena == self.end_result.leaf;
-        let end = if is_last {
-            Some(self.end_result.clone())
-        } else {
-            None
-        };
+        let end = if is_last { Some(self.end_result) } else { None };
 
         Q::delete_range(
             &mut node.elements,
@@ -127,7 +129,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
                 &self.start_query,
                 &self.end_query,
                 None,
-                Some(self.end_result.clone()),
+                Some(self.end_result),
             );
         }
     }
