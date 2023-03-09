@@ -10,6 +10,7 @@ use thunderdome::Index as ArenaIndex;
 /// - The tree is dropped
 /// - Or, when draining a range, the elements from the start/end
 ///   leaf node
+#[derive(Debug, Clone)]
 pub struct MoveEvent<'a, T> {
     /// If this is None, it means the element is deleted from the tree
     pub target_leaf: Option<ArenaIndex>,

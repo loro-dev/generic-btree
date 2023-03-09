@@ -1907,6 +1907,9 @@ impl<B: BTreeTrait> BTree<B> {
 
     pub fn push(&mut self, elem: B::Elem) {
         let leaf_idx = self.last_leaf();
+        if let Some(listener) = self.element_move_listener.as_ref() {
+            listener((leaf_idx, &elem).into());
+        }
         let leaf = self.get_mut(leaf_idx);
         debug_assert!(leaf.is_leaf());
         leaf.elements.push(elem);
@@ -1919,7 +1922,10 @@ impl<B: BTreeTrait> BTree<B> {
 
     pub fn prepend(&mut self, elem: B::Elem) {
         let leaf_idx = self.first_leaf();
-        let leaf = self.get_mut(leaf_idx);
+        let leaf = self.nodes.get_mut(leaf_idx).unwrap();
+        if let Some(listener) = self.element_move_listener.as_ref() {
+            listener((leaf_idx, &elem).into());
+        }
         debug_assert!(leaf.is_leaf());
         leaf.elements.insert(0, elem);
         let is_full = leaf.is_full();
