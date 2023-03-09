@@ -24,11 +24,12 @@ use core::{
     iter::Map,
     ops::{Deref, Range},
 };
-use std::mem::take;
+use std::{mem::take, ops::RangeBounds};
 
 use fxhash::FxHashMap;
 use smallvec::SmallVec;
-use thunderdome::{Arena, Index as ArenaIndex};
+use thunderdome::Arena;
+pub use thunderdome::Index as ArenaIndex;
 mod generic_impl;
 mod iter;
 pub use generic_impl::*;
@@ -1160,7 +1161,7 @@ impl<B: BTreeTrait> BTree<B> {
         Some(path)
     }
 
-    fn first_leaf(&self) -> ArenaIndex {
+    pub fn first_leaf(&self) -> ArenaIndex {
         let mut index = self.root;
         let mut node = self.nodes.get(index).unwrap();
         while node.is_internal() {
@@ -1171,7 +1172,7 @@ impl<B: BTreeTrait> BTree<B> {
         index
     }
 
-    fn last_leaf(&self) -> ArenaIndex {
+    pub fn last_leaf(&self) -> ArenaIndex {
         let mut index = self.root;
         let mut node = self.nodes.get(index).unwrap();
         while node.is_internal() {
@@ -1201,10 +1202,26 @@ impl<B: BTreeTrait> BTree<B> {
 
     pub fn iter_range(
         &self,
-        range: Range<QueryResult>,
+        range: impl RangeBounds<QueryResult>,
     ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
-        let start = range.start;
-        let end = range.end;
+        let start = match range.start_bound() {
+            std::ops::Bound::Included(start) => *start,
+            std::ops::Bound::Excluded(_) => unreachable!(),
+            std::ops::Bound::Unbounded => self.first_full_path(),
+        };
+        let end = match range.end_bound() {
+            std::ops::Bound::Included(end) => *end,
+            std::ops::Bound::Excluded(end) => *end,
+            std::ops::Bound::Unbounded => self.last_full_path(),
+        };
+        self._iter_range(start, end)
+    }
+
+    fn _iter_range(
+        &self,
+        start: QueryResult,
+        end: QueryResult,
+    ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
         let mut node_iter =
             iter::Iter::new(self, self.get_path(start.leaf), self.get_path(end.leaf));
         let mut elem_iter: Option<Map<_, _>> = None;
@@ -1254,6 +1271,27 @@ impl<B: BTreeTrait> BTree<B> {
                 }
             }
         })
+    }
+
+    pub fn first_full_path(&self) -> QueryResult {
+        QueryResult {
+            leaf: self.first_leaf(),
+            elem_index: 0,
+            offset: 0,
+            found: false,
+        }
+    }
+
+    pub fn last_full_path(&self) -> QueryResult {
+        let leaf = self.last_leaf();
+        let node = self.get_node(leaf);
+        let elem_index = node.elements.len();
+        QueryResult {
+            leaf,
+            elem_index,
+            offset: 0,
+            found: false,
+        }
     }
 
     // at call site the cache at path can be out-of-date.
