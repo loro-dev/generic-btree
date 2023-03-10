@@ -158,7 +158,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
     }
 
     #[inline(always)]
-    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) {
+    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem], diff: Option<()>) {
         if elements.is_empty() {
             return;
         }

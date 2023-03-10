@@ -486,7 +486,11 @@ impl BTreeTrait for RopeTrait {
         }
     }
 
-    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) -> isize {
+    fn calc_cache_leaf(
+        cache: &mut Self::Cache,
+        elements: &[Self::Elem],
+        diff: Option<Self::CacheDiff>,
+    ) -> isize {
         let new_cache = elements.iter().map(|x| x.len()).sum();
         let diff = new_cache as isize - *cache as isize;
         *cache = new_cache;

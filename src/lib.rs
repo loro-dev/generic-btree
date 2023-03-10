@@ -26,7 +26,7 @@ use core::{
 };
 use std::{mem::take, ops::RangeBounds};
 
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use thunderdome::Arena;
 pub use thunderdome::Index as ArenaIndex;
@@ -91,7 +91,11 @@ pub trait BTreeTrait {
         caches: &[Child<Self>],
         diff: Option<Self::CacheDiff>,
     ) -> Option<Self::CacheDiff>;
-    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) -> Self::CacheDiff;
+    fn calc_cache_leaf(
+        cache: &mut Self::Cache,
+        elements: &[Self::Elem],
+        diff: Option<Self::CacheDiff>,
+    ) -> Self::CacheDiff;
     fn merge_cache_diff(diff1: &mut Self::CacheDiff, diff2: &Self::CacheDiff);
 }
 
@@ -514,7 +518,7 @@ impl<B: BTreeTrait> Node<B> {
         if self.is_internal() {
             B::calc_cache_internal(cache, &self.children, diff)
         } else {
-            Some(B::calc_cache_leaf(cache, &self.elements))
+            Some(B::calc_cache_leaf(cache, &self.elements, diff))
         }
     }
 
@@ -523,7 +527,7 @@ impl<B: BTreeTrait> Node<B> {
     }
 }
 
-type DirtyMap = FxHashMap<(isize, ArenaIndex), HeapVec<Idx>>;
+type LeafDirtyMap<Diff> = FxHashMap<ArenaIndex, Option<Diff>>;
 
 struct LackInfo {
     is_parent_lack: bool,
@@ -802,23 +806,22 @@ impl<B: BTreeTrait> BTree<B> {
     /// TODO: make range: Range<QueryResult> since it's now a Copy type
     pub fn update<F>(&mut self, range: Range<&QueryResult>, f: &mut F)
     where
-        F: FnMut(MutElemArrSlice<'_, B::Elem>) -> bool,
+        F: FnMut(MutElemArrSlice<'_, B::Elem>) -> (bool, Option<B::CacheDiff>),
     {
         let start = range.start;
         let end = range.end;
         let start_leaf = start.leaf;
         let mut path = self.get_path(start_leaf);
         let end_leaf = end.leaf;
-        type Level = isize; // always positive, use isize to avoid subtract overflow
-        let mut dirty_map: FxHashMap<(Level, ArenaIndex), HeapVec<Idx>> = FxHashMap::default();
+        let mut dirty_map: LeafDirtyMap<B::CacheDiff> = FxHashMap::default();
 
         loop {
             let current_leaf = path.last().unwrap();
-            let slice = self.get_slice(&path, start_leaf, start, end_leaf, end);
-            let should_update_cache = f(slice);
+            let slice = self.get_slice(current_leaf.arena, start_leaf, start, end_leaf, end);
+            let (should_update_cache, cache_diff) = f(slice);
             if should_update_cache {
                 // TODO: TEST THIS
-                add_path_to_dirty_map(&path, &mut dirty_map);
+                add_leaf_dirty_map(current_leaf.arena, &mut dirty_map, cache_diff);
             }
 
             if current_leaf.arena == end_leaf {
@@ -857,8 +860,7 @@ impl<B: BTreeTrait> BTree<B> {
         let end = range.end;
         let start_leaf = start.leaf;
         let end_leaf = end.leaf;
-        type Level = isize; // always positive, use isize to avoid overflow
-        let mut dirty_map: FxHashMap<(Level, ArenaIndex), HeapVec<Idx>> = FxHashMap::default();
+        let mut dirty_map: LeafDirtyMap<B::CacheDiff> = FxHashMap::default();
         let start_path = self.get_path(start.leaf);
         let end_path = self.get_path(end.leaf);
         let max_same_parent_level = start_path
@@ -878,11 +880,17 @@ impl<B: BTreeTrait> BTree<B> {
             .iter(),
         ) {
             // all elements are in the same leaf
-            let slice = self.get_slice(path, start_leaf, &start, end_leaf, &end);
+            let slice = self.get_slice(
+                path.last().unwrap().arena,
+                start_leaf,
+                &start,
+                end_leaf,
+                &end,
+            );
             let should_update_cache = f(slice);
 
             if should_update_cache {
-                add_path_to_dirty_map(path, &mut dirty_map);
+                add_leaf_dirty_map(path.last().unwrap().arena, &mut dirty_map, None);
             }
         }
 
@@ -991,7 +999,7 @@ impl<B: BTreeTrait> BTree<B> {
         end: Option<&NodePath>,
         parent_level: usize,
         g: &mut G,
-        dirty_map: &mut DirtyMap,
+        dirty_map: &mut LeafDirtyMap<B::CacheDiff>,
     ) where
         G: FnMut(&mut Option<B::WriteBuffer>, &B::Cache) -> bool,
     {
@@ -1010,7 +1018,7 @@ impl<B: BTreeTrait> BTree<B> {
         {
             if g(&mut child.write_buffer, &child.cache) {
                 path[target_level] = Idx::new(child.arena, i);
-                add_path_to_dirty_map(&path, dirty_map)
+                add_leaf_dirty_map(path.last().unwrap().arena, dirty_map, None)
             }
         }
     }
@@ -1070,23 +1078,21 @@ impl<B: BTreeTrait> BTree<B> {
 
     fn get_slice(
         &mut self,
-        path: &NodePath,
+        current_leaf: ArenaIndex,
         start_leaf: ArenaIndex,
         start: &QueryResult,
         end_leaf: ArenaIndex,
         end: &QueryResult,
     ) -> MutElemArrSlice<<B as BTreeTrait>::Elem> {
-        let current_leaf = path.last().unwrap();
-        let idx = *path.last().unwrap();
-        let node = self.get_mut(idx.arena);
+        let node = self.get_mut(current_leaf);
         MutElemArrSlice {
             elements: &mut node.elements,
-            start: if current_leaf.arena == start_leaf {
+            start: if current_leaf == start_leaf {
                 Some((start.elem_index, start.offset))
             } else {
                 None
             },
-            end: if current_leaf.arena == end_leaf {
+            end: if current_leaf == end_leaf {
                 Some((end.elem_index, end.offset))
             } else {
                 None
@@ -1094,16 +1100,26 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    fn update_dirty_cache_map(&mut self, dirty_map: DirtyMap) {
-        let mut dirty_set: StackVec<((isize, ArenaIndex), _)> = dirty_map.into_iter().collect();
-        dirty_set.sort_unstable_by_key(|x| -x.0 .0);
+    fn update_dirty_cache_map(&mut self, mut dirty_map: LeafDirtyMap<B::CacheDiff>) {
+        // Sort by level. Now order is from leaf to root
         let mut diff_map: FxHashMap<ArenaIndex, B::CacheDiff> = FxHashMap::default();
-        for ((_, parent_idx), children) in dirty_set {
-            for Idx { arena, arr } in children {
-                let (child, parent) = self.get2_mut(arena, parent_idx);
-                let cache_diff =
-                    child.calc_cache(&mut parent.children[arr].cache, diff_map.remove(&arena));
+        for (idx, diff) in dirty_map.iter_mut() {
+            if let Some(diff) = take(diff) {
+                diff_map.insert(*idx, diff);
+            }
+        }
+        let mut visit_set: FxHashSet<ArenaIndex> = dirty_map.keys().copied().collect();
+        while !visit_set.is_empty() {
+            for child_idx in take(&mut visit_set) {
+                let node = self.nodes.get(child_idx).unwrap();
+                let Some(parent_idx) = node.parent else { continue };
+                let (child, parent) = self.get2_mut(child_idx, parent_idx);
+                let cache_diff = child.calc_cache(
+                    &mut parent.children[child.parent_slot as usize].cache,
+                    diff_map.remove(&child_idx),
+                );
 
+                visit_set.insert(parent_idx);
                 if let Some(e) = diff_map.get_mut(&parent_idx) {
                     B::merge_cache_diff(e, &cache_diff.unwrap());
                 } else {
@@ -1953,21 +1969,9 @@ impl<B: BTreeTrait> BTree<B> {
     }
 }
 
-fn add_path_to_dirty_map(path: &[Idx], dirty_map: &mut DirtyMap) {
-    let mut current = path.last().unwrap();
-    let mut parent_level = path.len() as isize - 2;
-    while parent_level >= 0 {
-        let parent = path.get(parent_level as usize).unwrap();
-        if let Some(arr) = dirty_map.get_mut(&(parent_level, parent.arena)) {
-            arr.push(*current);
-            // parent is already created by others, so all ancestors must also be created
-            break;
-        } else {
-            dirty_map.insert((parent_level, parent.arena), vec![*current]);
-            current = parent;
-            parent_level -= 1;
-        }
-    }
+#[inline(always)]
+fn add_leaf_dirty_map<T>(leaf: ArenaIndex, dirty_map: &mut LeafDirtyMap<T>, leaf_diff: Option<T>) {
+    dirty_map.insert(leaf, leaf_diff);
 }
 
 impl<B: BTreeTrait> BTree<B> {
