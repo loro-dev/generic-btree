@@ -232,14 +232,20 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
         }
 
         if let Some(after) = leaf_after_drain_range {
-            self.tree
-                .recursive_update_cache(after, leaf_after_drain_range == leaf_before_drain_range);
+            self.tree.recursive_update_cache(
+                after,
+                leaf_after_drain_range == leaf_before_drain_range,
+                None,
+            );
         }
 
         // otherwise the path is invalid (e.g. the tree is empty)
         if let Some(before) = leaf_before_drain_range {
-            self.tree
-                .recursive_update_cache(before, leaf_after_drain_range == leaf_before_drain_range);
+            self.tree.recursive_update_cache(
+                before,
+                leaf_after_drain_range == leaf_before_drain_range,
+                None,
+            );
             seal(self.tree, before);
         } else {
             self.tree.update_root_cache();

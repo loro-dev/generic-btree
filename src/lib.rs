@@ -584,7 +584,7 @@ impl<B: BTreeTrait> BTree<B> {
         let node = self.nodes.get_mut(index).unwrap();
         B::insert(&mut node.elements, result.elem_index, result.offset, data);
         let is_full = node.is_full();
-        self.recursive_update_cache(index, true);
+        self.recursive_update_cache(index, true, None);
         if is_full {
             self.split(result.leaf);
         }
@@ -608,7 +608,7 @@ impl<B: BTreeTrait> BTree<B> {
         B::insert_batch(&mut node.elements, result.elem_index, result.offset, data);
 
         let is_full = node.is_full();
-        self.recursive_update_cache(result.leaf, true);
+        self.recursive_update_cache(result.leaf, true, None);
         if is_full {
             self.split(result.leaf);
         }
@@ -637,7 +637,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         let is_full = node.is_full();
-        self.recursive_update_cache(result.leaf, true);
+        self.recursive_update_cache(result.leaf, true, None);
         if is_full {
             self.split(result.leaf);
         }
@@ -666,7 +666,7 @@ impl<B: BTreeTrait> BTree<B> {
 
         let is_full = node.is_full();
         let is_lack = node.is_lack();
-        self.recursive_update_cache(result.leaf, true);
+        self.recursive_update_cache(result.leaf, true, None);
         if is_full {
             self.split(result.leaf);
         } else if is_lack {
@@ -924,14 +924,18 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     /// update leaf node's elements, return true if cache need to be updated
-    pub fn update_leaf(&mut self, node_idx: ArenaIndex, f: impl FnOnce(&mut Vec<B::Elem>) -> bool) {
+    pub fn update_leaf(
+        &mut self,
+        node_idx: ArenaIndex,
+        f: impl FnOnce(&mut Vec<B::Elem>) -> (bool, Option<B::CacheDiff>),
+    ) {
         let node = self.nodes.get_mut(node_idx).unwrap();
         assert!(node.is_leaf());
-        let need_update_cache = f(&mut node.elements);
+        let (need_update_cache, diff) = f(&mut node.elements);
         let is_full = node.is_full();
         let is_lack = node.is_lack();
         if need_update_cache {
-            self.recursive_update_cache(node_idx, true);
+            self.recursive_update_cache(node_idx, true, diff);
         }
         if is_full {
             self.split(node_idx);
@@ -962,14 +966,14 @@ impl<B: BTreeTrait> BTree<B> {
             let is_full = node.is_full();
             let is_lack = node.is_lack();
             if need_update_cache {
-                self.recursive_update_cache(b_idx, true);
+                self.recursive_update_cache(b_idx, true, None);
             }
             (is_full, is_lack)
         } else {
             (false, false)
         };
         if need_update_cache {
-            self.recursive_update_cache(a_idx, true);
+            self.recursive_update_cache(a_idx, true, None);
         }
         if is_full {
             self.split(a_idx);
@@ -1731,11 +1735,16 @@ impl<B: BTreeTrait> BTree<B> {
 
     /// Sometimes we cannot use diff because no only the given node is changed, but also its siblings.
     /// For example, after delete a range of nodes, we cannot use the diff from child to infer the diff of parent.
-    pub fn recursive_update_cache(&mut self, node_idx: ArenaIndex, can_use_diff: bool) {
+    pub fn recursive_update_cache(
+        &mut self,
+        node_idx: ArenaIndex,
+        can_use_diff: bool,
+        cache_diff: Option<B::CacheDiff>,
+    ) {
         let mut this_idx = node_idx;
         let mut node = self.get_mut(node_idx);
         let mut this_arr = node.parent_slot;
-        let mut diff = None;
+        let mut diff = cache_diff;
         if can_use_diff {
             while node.parent.is_some() {
                 let parent_idx = node.parent.unwrap();
@@ -1930,7 +1939,7 @@ impl<B: BTreeTrait> BTree<B> {
         debug_assert!(leaf.is_leaf());
         leaf.elements.push(elem);
         let is_full = leaf.is_full();
-        self.recursive_update_cache(leaf_idx, true);
+        self.recursive_update_cache(leaf_idx, true, None);
         if is_full {
             self.split(leaf_idx);
         }
@@ -1945,7 +1954,7 @@ impl<B: BTreeTrait> BTree<B> {
         debug_assert!(leaf.is_leaf());
         leaf.elements.insert(0, elem);
         let is_full = leaf.is_full();
-        self.recursive_update_cache(leaf_idx, true);
+        self.recursive_update_cache(leaf_idx, true, None);
         if is_full {
             self.split(leaf_idx);
         }

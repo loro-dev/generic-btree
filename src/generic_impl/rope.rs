@@ -368,7 +368,7 @@ impl Rope {
             }
         }
         let is_full = leaf.is_full();
-        tree.recursive_update_cache(pos.leaf, true);
+        tree.recursive_update_cache(pos.leaf, true, None);
         if is_full {
             tree.split(pos.leaf);
         }
