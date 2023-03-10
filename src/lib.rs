@@ -820,7 +820,6 @@ impl<B: BTreeTrait> BTree<B> {
             let slice = self.get_slice(current_leaf.arena, start_leaf, start, end_leaf, end);
             let (should_update_cache, cache_diff) = f(slice);
             if should_update_cache {
-                // TODO: TEST THIS
                 add_leaf_dirty_map(current_leaf.arena, &mut dirty_map, cache_diff);
             }
 
@@ -829,6 +828,85 @@ impl<B: BTreeTrait> BTree<B> {
             }
 
             if !self.next_sibling(&mut path) {
+                break;
+            }
+        }
+
+        if !dirty_map.is_empty() {
+            self.update_dirty_cache_map(dirty_map);
+        } else {
+            self.nodes
+                .get(self.root)
+                .unwrap()
+                .calc_cache(&mut self.root_cache, None);
+        }
+    }
+
+    /// Update the elements in place with filter to skip nodes in advance
+    ///
+    /// F should returns true if the cache need to be updated
+    ///
+    /// This method may break the balance of the tree
+    ///
+    /// If the given range has zero length, f will still be called, and the slice will
+    /// have same `start` and `end` field
+    ///
+    /// TODO: need better test coverage
+    /// TODO: make range: Range<QueryResult> since it's now a Copy type
+    pub fn update_with_filter<F>(
+        &mut self,
+        range: Range<&QueryResult>,
+        f: &mut F,
+        filter: &dyn Fn(&B::Cache) -> bool,
+    ) where
+        F: FnMut(MutElemArrSlice<'_, B::Elem>) -> (bool, Option<B::CacheDiff>),
+    {
+        let start = range.start;
+        let end = range.end;
+        let start_leaf = start.leaf;
+        let mut current_leaf = start_leaf;
+        let end_leaf = end.leaf;
+        let end_path = self.get_path(end_leaf);
+        let mut dirty_map: LeafDirtyMap<B::CacheDiff> = FxHashMap::default();
+
+        loop {
+            let leaf = self.nodes.get(current_leaf).unwrap();
+            let cache = leaf
+                .parent
+                .map(|x| &self.get_node(x).children[leaf.parent_slot as usize].cache)
+                .unwrap_or(&self.root_cache);
+
+            if !filter(cache) {
+                if current_leaf == end_leaf {
+                    break;
+                }
+
+                if let Some(next) =
+                    self.next_same_level_node_with_filter(current_leaf, &end_path, filter)
+                {
+                    current_leaf = next;
+                } else {
+                    break;
+                }
+
+                continue;
+            }
+
+            let slice = self.get_slice(current_leaf, start_leaf, start, end_leaf, end);
+            let (should_update_cache, cache_diff) = f(slice);
+            if should_update_cache {
+                add_leaf_dirty_map(current_leaf, &mut dirty_map, cache_diff);
+            }
+
+            if current_leaf == end_leaf {
+                break;
+            }
+
+            if let Some(next) =
+                self.next_same_level_node_with_filter(current_leaf, &end_path, filter)
+            {
+                current_leaf = next;
+            } else {
                 break;
             }
         }
@@ -1830,6 +1908,40 @@ impl<B: BTreeTrait> BTree<B> {
             parent_next.children.first().map(|x| x.arena)
         } else {
             None
+        }
+    }
+
+    fn next_same_level_node_with_filter(
+        &self,
+        node_idx: ArenaIndex,
+        end_path: &[Idx],
+        filter: &dyn Fn(&B::Cache) -> bool,
+    ) -> Option<ArenaIndex> {
+        let node = self.get_node(node_idx);
+        let mut parent = self.get_node(node.parent?);
+        let mut next_index = node.parent_slot as usize + 1;
+        loop {
+            if let Some(next) = parent.children.get(next_index) {
+                if filter(&next.cache) {
+                    return Some(next.arena);
+                }
+                if next.arena == end_path.last().unwrap().arena {
+                    return None;
+                }
+
+                next_index += 1;
+            } else if end_path[end_path.len() - 2].arena == node.parent.unwrap() {
+                return None;
+            } else if let Some(parent_next) = self.next_same_level_node_with_filter(
+                node.parent?,
+                &end_path[..end_path.len() - 1],
+                filter,
+            ) {
+                parent = self.get_node(parent_next);
+                next_index = 0;
+            } else {
+                return None;
+            }
         }
     }
 
