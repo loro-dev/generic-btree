@@ -1031,6 +1031,7 @@ impl<B: BTreeTrait> BTree<B> {
     ) {
         let node = self.nodes.get_mut(a_idx).unwrap();
         assert!(node.is_leaf());
+        // apply a
         let need_update_cache = f(
             &mut node.elements,
             if a_idx == b_idx { None } else { Some(a_idx) },
@@ -1038,6 +1039,7 @@ impl<B: BTreeTrait> BTree<B> {
         let is_full = node.is_full();
         let is_lack = node.is_lack();
         let (b_full, b_lack) = if b_idx != a_idx {
+            // apply b
             let node = self.nodes.get_mut(b_idx).unwrap();
             assert!(node.is_leaf());
             let need_update_cache = f(&mut node.elements, Some(b_idx));
@@ -1062,7 +1064,9 @@ impl<B: BTreeTrait> BTree<B> {
         if is_lack {
             self.handle_lack(a_idx);
         }
-        if b_lack {
+
+        // b may be deleted after a handle_lack
+        if b_lack && self.nodes.contains(b_idx) {
             self.handle_lack(b_idx);
         }
     }
