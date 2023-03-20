@@ -139,7 +139,6 @@ impl<Key, Value> Default for OrdTrait<Key, Value> {
 
 impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for OrdTrait<Key, Value> {
     type Elem = (Key, Value);
-    type WriteBuffer = ();
     type Cache = Option<(Key, Key)>;
 
     const MAX_LEN: usize = 32;

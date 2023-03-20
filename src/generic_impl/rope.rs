@@ -462,7 +462,6 @@ impl ToString for Rope {
 
 impl BTreeTrait for RopeTrait {
     type Elem = RopeElem;
-    type WriteBuffer = ();
     type Cache = usize;
 
     const MAX_LEN: usize = 32;

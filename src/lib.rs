@@ -48,7 +48,6 @@ pub trait BTreeTrait {
     type CacheDiff: Debug;
     /// Use () if you don't need write buffer.
     /// Associated type default is still unstable so we don't provide default value.
-    type WriteBuffer: Debug + Clone;
     const MAX_LEN: usize;
 
     #[allow(unused)]
@@ -67,21 +66,6 @@ pub trait BTreeTrait {
     ) where
         Self::Elem: Clone,
     {
-        unimplemented!()
-    }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn apply_write_buffer_to_elements(
-        elements: &mut HeapVec<Self::Elem>,
-        write_buffer: &Self::WriteBuffer,
-    ) {
-        unimplemented!()
-    }
-
-    #[allow(unused)]
-    #[inline(always)]
-    fn apply_write_buffer_to_nodes(children: &mut [Child<Self>], write_buffer: &Self::WriteBuffer) {
         unimplemented!()
     }
 
@@ -321,20 +305,9 @@ pub struct Node<B: BTreeTrait> {
     children: HeapVec<Child<B>>,
 }
 
-impl<
-        W: Debug,
-        Cache: Debug,
-        Elem: Debug,
-        B: BTreeTrait<Elem = Elem, Cache = Cache, WriteBuffer = W>,
-    > Debug for BTree<B>
-{
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for BTree<B> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        fn fmt_node<
-            W: Debug,
-            Cache: Debug,
-            Elem: Debug,
-            B: BTreeTrait<Elem = Elem, WriteBuffer = W>,
-        >(
+        fn fmt_node<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem>>(
             tree: &BTree<B>,
             node: &Node<B>,
             f: &mut core::fmt::Formatter<'_>,
@@ -345,10 +318,10 @@ impl<
                     indent(f, indent_size)?;
                     let child_node = tree.get_node(child.arena);
                     f.write_fmt(format_args!(
-                        "{} Arena({:?}) Cache: {:?} Buffer: {:?}\n",
-                        child_node.parent_slot, &child.arena, &child.cache, &child.write_buffer
+                        "{} Arena({:?}) Cache: {:?}\n",
+                        child_node.parent_slot, &child.arena, &child.cache
                     ))?;
-                    fmt_node::<W, Cache, Elem, B>(tree, child_node, f, indent_size + 1)?;
+                    fmt_node::<Cache, Elem, B>(tree, child_node, f, indent_size + 1)?;
                 }
             } else {
                 if node.elements.is_empty() {
@@ -377,17 +350,11 @@ impl<
             "Root Arena({:?}) Cache: {:?}\n",
             &self.root, &self.root_cache
         ))?;
-        fmt_node::<W, Cache, Elem, B>(self, self.nodes.get(self.root).unwrap(), f, 1)
+        fmt_node::<Cache, Elem, B>(self, self.nodes.get(self.root).unwrap(), f, 1)
     }
 }
 
-impl<
-        W: Debug,
-        Cache: Debug,
-        Elem: Debug,
-        B: BTreeTrait<Elem = Elem, Cache = Cache, WriteBuffer = W>,
-    > Debug for Node<B>
-{
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for Node<B> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Node")
             .field("elements", &self.elements)
@@ -396,18 +363,11 @@ impl<
     }
 }
 
-impl<
-        W: Debug,
-        Cache: Debug,
-        Elem: Debug,
-        B: BTreeTrait<Elem = Elem, Cache = Cache, WriteBuffer = W>,
-    > Debug for Child<B>
-{
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for Child<B> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Child")
             .field("index", &self.arena)
             .field("cache", &self.cache)
-            .field("write_buffer", &self.write_buffer)
             .finish()
     }
 }
@@ -425,7 +385,6 @@ impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for Node<B> {
 pub struct Child<B: ?Sized + BTreeTrait> {
     arena: ArenaIndex,
     pub cache: B::Cache,
-    pub write_buffer: Option<B::WriteBuffer>,
 }
 
 impl<B: BTreeTrait> Clone for Child<B> {
@@ -433,7 +392,6 @@ impl<B: BTreeTrait> Clone for Child<B> {
         Self {
             arena: self.arena,
             cache: self.cache.clone(),
-            write_buffer: self.write_buffer.clone(),
         }
     }
 }
@@ -445,11 +403,7 @@ impl<B: BTreeTrait> Child<B> {
     }
 
     fn new(arena: ArenaIndex, cache: B::Cache) -> Self {
-        Self {
-            arena,
-            cache,
-            write_buffer: None,
-        }
+        Self { arena, cache }
     }
 }
 
@@ -764,7 +718,6 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         let path = self.get_path(q.leaf);
-        self.flush_path(PathRef::from(&path));
         let index = q.leaf;
         let node = self.nodes.get(index)?;
         node.elements.get(q.elem_index)
@@ -777,7 +730,6 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         let path = self.get_path(q.leaf);
-        self.flush_path(PathRef::from(&path));
         let index = q.leaf;
         let node = self.nodes.get_mut(index)?;
         node.elements.get_mut(q.elem_index)
@@ -787,7 +739,6 @@ impl<B: BTreeTrait> BTree<B> {
     where
         Q: Query<B>,
     {
-        self.flush_write_buffer();
         let from = self.query::<Q>(&range.start);
         let to = self.query::<Q>(&range.end);
         iter::Drain::new(self, range.start, range.end, from, to)
@@ -921,86 +872,6 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    /// Update the elements with buffer
-    ///
-    /// F and G should returns true if the cache need to be updated
-    ///
-    /// Update is not in the order of the elements
-    ///
-    /// This method may break the balance of the tree
-    pub fn update_with_buffer<F, G>(&mut self, range: Range<QueryResult>, f: &mut F, mut g: G)
-    where
-        F: FnMut(MutElemArrSlice<'_, B::Elem>) -> bool,
-        G: FnMut(&mut Option<B::WriteBuffer>, &B::Cache) -> bool,
-    {
-        self.need_flush = true;
-        let start = range.start;
-        let end = range.end;
-        let start_leaf = start.leaf;
-        let end_leaf = end.leaf;
-        let mut dirty_map: LeafDirtyMap<B::CacheDiff> = FxHashMap::default();
-        let start_path = self.get_path(start.leaf);
-        let end_path = self.get_path(end.leaf);
-        let max_same_parent_level = start_path
-            .iter()
-            .zip(end_path.iter())
-            .take_while(|(a, b)| a.arena == b.arena)
-            .count()
-            - 1;
-        let leaf_level = start_path.len() - 1;
-
-        for path in Some(&start_path).iter().chain(
-            (if start_leaf == end_leaf {
-                None
-            } else {
-                Some(&end_path)
-            })
-            .iter(),
-        ) {
-            // all elements are in the same leaf
-            let slice = self.get_slice(
-                path.last().unwrap().arena,
-                start_leaf,
-                &start,
-                end_leaf,
-                &end,
-            );
-            let should_update_cache = f(slice);
-
-            if should_update_cache {
-                add_leaf_dirty_map(path.last().unwrap().arena, &mut dirty_map, None);
-            }
-        }
-
-        if max_same_parent_level < leaf_level {
-            // write to buffer
-            self.write_to_buffer(
-                Some(&start_path),
-                Some(&end_path),
-                max_same_parent_level,
-                &mut g,
-                &mut dirty_map,
-            );
-
-            for parent_level in max_same_parent_level + 1..leaf_level {
-                self.write_to_buffer(
-                    Some(&start_path),
-                    None,
-                    parent_level,
-                    &mut g,
-                    &mut dirty_map,
-                );
-                self.write_to_buffer(None, Some(&end_path), parent_level, &mut g, &mut dirty_map);
-            }
-        }
-
-        if !dirty_map.is_empty() {
-            self.update_dirty_cache_map(dirty_map);
-        } else {
-            self.update_root_cache();
-        }
-    }
-
     /// update leaf node's elements, return true if cache need to be updated
     pub fn update_leaf(
         &mut self,
@@ -1079,89 +950,6 @@ impl<B: BTreeTrait> BTree<B> {
             .calc_cache(&mut self.root_cache, None);
     }
 
-    fn write_to_buffer<G>(
-        &mut self,
-        start: Option<&NodePath>,
-        end: Option<&NodePath>,
-        parent_level: usize,
-        g: &mut G,
-        dirty_map: &mut LeafDirtyMap<B::CacheDiff>,
-    ) where
-        G: FnMut(&mut Option<B::WriteBuffer>, &B::Cache) -> bool,
-    {
-        let path = start.unwrap_or_else(|| end.unwrap());
-        let parent = self.nodes.get_mut(path[parent_level].arena).unwrap();
-        debug_assert!(parent.is_internal());
-        let target_level = parent_level + 1;
-        let mut path: NodePath = path[..=target_level].iter().cloned().collect();
-        let start_index = start.map(|x| x[target_level].arr + 1).unwrap_or(0);
-        let end_index = end
-            .map(|x| x[target_level].arr)
-            .unwrap_or(parent.children.len());
-        for (i, child) in parent.children[start_index..end_index]
-            .iter_mut()
-            .enumerate()
-        {
-            if g(&mut child.write_buffer, &child.cache) {
-                path[target_level] = Idx::new(child.arena, i);
-                add_leaf_dirty_map(path.last().unwrap().arena, dirty_map, None)
-            }
-        }
-    }
-
-    /// Perf: can use dirty mark to speed this up. But it requires a new field in node
-    ///
-    /// Alternatively, we can reduce the usage of this method
-    fn recursive_flush_buffer(&mut self, parent_idx: ArenaIndex) {
-        let parent = self.nodes.get_mut(parent_idx).unwrap();
-        if parent.is_leaf() {
-            return;
-        }
-
-        let mut children = core::mem::take(&mut parent.children);
-        for (i, child) in children.iter_mut().enumerate() {
-            if let Some(buffer) = core::mem::take(&mut child.write_buffer) {
-                self.apply_child_buffer(
-                    buffer,
-                    Idx {
-                        arena: child.arena,
-                        arr: i,
-                    },
-                )
-            }
-        }
-
-        for child in children.iter() {
-            self.recursive_flush_buffer(child.arena);
-        }
-        let parent = self.nodes.get_mut(parent_idx).unwrap();
-        parent.children = children;
-    }
-
-    /// Apply the write buffer all the way down the path
-    fn flush_path(&mut self, path: PathRef) {
-        // root cannot have write buffer
-        for i in 0..path.len() - 1 {
-            let parent = path[i];
-            let child_idx = path[i + 1];
-            let parent = self.get_mut(parent.arena);
-            if let Some(buffer) = core::mem::take(&mut parent.children[child_idx.arr].write_buffer)
-            {
-                self.apply_child_buffer(buffer, child_idx);
-            }
-        }
-    }
-
-    fn apply_child_buffer(&mut self, write_buffer: B::WriteBuffer, child_idx: Idx) {
-        let child = self.nodes.get_mut(child_idx.arena);
-        let child = child.unwrap();
-        if child.is_internal() {
-            B::apply_write_buffer_to_nodes(&mut child.children, &write_buffer)
-        } else {
-            B::apply_write_buffer_to_elements(&mut child.elements, &write_buffer)
-        }
-    }
-
     fn get_slice(
         &mut self,
         current_leaf: ArenaIndex,
@@ -1218,18 +1006,6 @@ impl<B: BTreeTrait> BTree<B> {
             .get(self.root)
             .unwrap()
             .calc_cache(&mut self.root_cache, None);
-    }
-
-    pub fn flush_write_buffer(&mut self) {
-        if self.need_flush {
-            self.recursive_flush_buffer(self.root);
-            self.need_flush = false;
-        }
-    }
-
-    pub fn iter_flushed(&mut self) -> impl Iterator<Item = &B::Elem> + '_ {
-        self.recursive_flush_buffer(self.root);
-        self.iter()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &B::Elem> + '_ {
@@ -1321,15 +1097,6 @@ impl<B: BTreeTrait> BTree<B> {
         Q: Query<B>,
     {
         self.query::<Q>(&range.start)..self.query::<Q>(&range.end)
-    }
-
-    /// TODO: performance can be optimized by only unloading the related buffer
-    pub fn iter_flushed_range(
-        &mut self,
-        range: Range<QueryResult>,
-    ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
-        self.recursive_flush_buffer(self.root);
-        self.iter_range(range)
     }
 
     pub fn iter_range(
@@ -1492,7 +1259,6 @@ impl<B: BTreeTrait> BTree<B> {
             Child {
                 arena: right_arena_idx,
                 cache: right_cache,
-                write_buffer: Default::default(),
             },
         );
         // don't need to recursive update cache

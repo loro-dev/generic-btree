@@ -12,12 +12,6 @@ use generic_btree::{
 pub struct RangeNumMap(BTree<RangeNumMapTrait>);
 struct RangeNumMapTrait;
 
-#[derive(Clone, Debug)]
-enum Modifier {
-    Add(isize),
-    Set(isize),
-}
-
 #[derive(Debug)]
 struct Elem {
     value: Option<isize>,
@@ -32,30 +26,23 @@ impl RangeNumMap {
     pub fn insert(&mut self, range: Range<usize>, value: isize) {
         self.reserve_range(&range);
         let range = self.0.range::<LengthFinder>(range);
-        self.0.update_with_buffer(
-            range,
-            &mut |mut slice| {
-                let before_len = if cfg!(debug_assert) {
-                    slice.elements.iter().map(|x| x.len).sum()
-                } else {
-                    0
-                };
-                let ans = update_slice::<Elem, _>(&mut slice, &mut |x| {
-                    x.value = Some(value);
-                    false
-                });
-                scan_and_merge(slice.elements, slice.start.map(|x| x.0).unwrap_or(0));
-                if cfg!(debug_assert) {
-                    let after_len = slice.elements.iter().map(|x| x.len).sum();
-                    assert_eq!(before_len, after_len);
-                }
-                ans
-            },
-            |buffer, _| {
-                *buffer = Some(Modifier::Set(value));
+        self.0.update(&range.start..&range.end, &mut |mut slice| {
+            let before_len = if cfg!(debug_assert) {
+                slice.elements.iter().map(|x| x.len).sum()
+            } else {
+                0
+            };
+            let ans = update_slice::<Elem, _>(&mut slice, &mut |x| {
+                x.value = Some(value);
                 false
-            },
-        );
+            });
+            scan_and_merge(slice.elements, slice.start.map(|x| x.0).unwrap_or(0));
+            if cfg!(debug_assert) {
+                let after_len = slice.elements.iter().map(|x| x.len).sum();
+                assert_eq!(before_len, after_len);
+            }
+            (ans, None)
+        });
     }
 
     pub fn get(&mut self, index: usize) -> Option<isize> {
@@ -65,7 +52,7 @@ impl RangeNumMap {
 
     pub fn iter(&mut self) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
         let mut index = 0;
-        self.0.iter_flushed().filter_map(move |elem| {
+        self.0.iter().filter_map(move |elem| {
             let len = elem.len;
             let value = elem.value?;
             let range = index..index + len;
@@ -77,32 +64,25 @@ impl RangeNumMap {
     pub fn plus(&mut self, range: Range<usize>, change: isize) {
         self.reserve_range(&range);
         let range = self.0.range::<LengthFinder>(range);
-        self.0.update_with_buffer(
-            range,
-            &mut |mut slice| {
-                let before_len = if cfg!(debug_assert) {
-                    slice.elements.iter().map(|x| x.len).sum()
-                } else {
-                    0
-                };
-                let ans = update_slice::<Elem, _>(&mut slice, &mut |x| {
-                    if let Some(v) = &mut x.value {
-                        *v += change;
-                    }
-                    false
-                });
-                scan_and_merge(slice.elements, slice.start.map(|x| x.0).unwrap_or(0));
-                if cfg!(debug_assert) {
-                    let after_len = slice.elements.iter().map(|x| x.len).sum();
-                    assert_eq!(before_len, after_len);
+        self.0.update(&range.start..&range.end, &mut |mut slice| {
+            let before_len = if cfg!(debug_assert) {
+                slice.elements.iter().map(|x| x.len).sum()
+            } else {
+                0
+            };
+            let ans = update_slice::<Elem, _>(&mut slice, &mut |x| {
+                if let Some(v) = &mut x.value {
+                    *v += change;
                 }
-                ans
-            },
-            |buffer, _| {
-                *buffer = Some(Modifier::Add(change));
                 false
-            },
-        );
+            });
+            scan_and_merge(slice.elements, slice.start.map(|x| x.0).unwrap_or(0));
+            if cfg!(debug_assert) {
+                let after_len = slice.elements.iter().map(|x| x.len).sum();
+                assert_eq!(before_len, after_len);
+            }
+            (ans, None)
+        });
     }
 
     fn reserve_range(&mut self, range: &Range<usize>) {
@@ -233,8 +213,6 @@ impl BTreeTrait for RangeNumMapTrait {
     /// len
     type Cache = usize;
 
-    type WriteBuffer = Modifier;
-
     const MAX_LEN: usize = 8;
 
     fn calc_cache_internal(
@@ -256,39 +234,15 @@ impl BTreeTrait for RangeNumMapTrait {
         }
     }
 
-    fn calc_cache_leaf(cache: &mut Self::Cache, elements: &[Self::Elem]) -> isize {
+    fn calc_cache_leaf(
+        cache: &mut Self::Cache,
+        elements: &[Self::Elem],
+        _: Option<Self::CacheDiff>,
+    ) -> isize {
         let new_cache = elements.iter().map(|c| c.len).sum();
         let diff = new_cache as isize - *cache as isize;
         *cache = new_cache;
         diff
-    }
-
-    fn apply_write_buffer_to_elements(
-        elements: &mut generic_btree::HeapVec<Self::Elem>,
-        write_buffer: &Self::WriteBuffer,
-    ) {
-        elements.iter_mut().for_each(|x| {
-            x.value = match write_buffer {
-                Modifier::Add(value) => x.value.map(|x| x + value),
-                Modifier::Set(value) => Some(*value),
-            }
-        });
-    }
-
-    fn apply_write_buffer_to_nodes(
-        children: &mut [generic_btree::Child<Self>],
-        write_buffer: &Self::WriteBuffer,
-    ) {
-        children.iter_mut().for_each(|x| {
-            let v = match write_buffer {
-                Modifier::Add(value) => x.write_buffer.as_ref().map(|x| match x {
-                    Modifier::Add(x) => Modifier::Add(x + value),
-                    Modifier::Set(x) => Modifier::Set(x + value),
-                }),
-                Modifier::Set(value) => Some(Modifier::Set(*value)),
-            };
-            x.write_buffer = v;
-        });
     }
 
     type CacheDiff = isize;
