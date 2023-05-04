@@ -24,7 +24,7 @@ use core::{
     iter::Map,
     ops::{Deref, Range},
 };
-use std::{mem::take, ops::RangeBounds};
+use std::{cmp::Ordering, mem::take, ops::RangeBounds};
 
 use fxhash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -1857,6 +1857,25 @@ impl<B: BTreeTrait> BTree<B> {
         if let Some(listener) = self.element_move_listener.as_ref() {
             listener((leaf, elem).into());
         }
+    }
+
+    /// compare the position of a and b
+    pub fn compare_pos(&self, a: QueryResult, b: QueryResult) -> Ordering {
+        if a.leaf == b.leaf {
+            if a.elem_index == b.elem_index {
+                return a.offset.cmp(&b.offset);
+            }
+            return a.elem_index.cmp(&b.elem_index);
+        }
+
+        let mut node_a = self.get_node(a.leaf);
+        let mut node_b = self.get_node(b.leaf);
+        while node_a.parent != node_b.parent {
+            node_a = self.get_node(node_a.parent.unwrap());
+            node_b = self.get_node(node_b.parent.unwrap());
+        }
+
+        node_a.parent_slot.cmp(&node_b.parent_slot)
     }
 }
 

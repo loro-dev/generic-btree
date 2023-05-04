@@ -214,6 +214,8 @@ impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug + 'static> Query<O
 
 #[cfg(test)]
 mod test {
+    use std::cmp::Ordering;
+
     use rand::{Rng, SeedableRng};
 
     use crate::HeapVec;
@@ -239,6 +241,23 @@ mod test {
         tree.insert(12);
         tree.delete(&12);
         assert_eq!(tree.len(), 0);
+    }
+
+    #[test]
+    fn test_compare_pos() {
+        let mut tree: OrdTreeSet<u64> = OrdTreeSet::new();
+        for i in 0..100 {
+            tree.insert(i);
+        }
+        for i in 0..99 {
+            let a = tree.0.tree.query::<OrdTrait<u64, ()>>(&i);
+            assert_eq!(tree.0.tree.compare_pos(a, a), Ordering::Equal);
+            for j in i + 1..100 {
+                let b = tree.0.tree.query::<OrdTrait<u64, ()>>(&j);
+                assert_eq!(tree.0.tree.compare_pos(a, b), Ordering::Less);
+                assert_eq!(tree.0.tree.compare_pos(b, a), Ordering::Greater);
+            }
+        }
     }
 
     mod move_event_test {
