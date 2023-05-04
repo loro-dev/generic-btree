@@ -649,11 +649,12 @@ impl<B: BTreeTrait> BTree<B> {
     /// Shift by offset 1.
     ///
     /// It will not stay on empty spans but scan forward
-    pub fn shift_path_by_one_offset(&self, path: &mut QueryResult)
+    pub fn shift_path_by_one_offset(&self, mut path: QueryResult) -> Option<QueryResult>
     where
         B::Elem: rle::HasLength,
     {
         let mut node = self.nodes.get(path.leaf).unwrap();
+        path.offset += 1;
         loop {
             if path.elem_index == node.elements.len() {
                 node = self.nodes.get(path.leaf).unwrap();
@@ -662,23 +663,22 @@ impl<B: BTreeTrait> BTree<B> {
                     path.offset = 0;
                     path.leaf = next;
                 } else {
-                    path.elem_index = node.children.len();
-                    path.offset = 0;
-                    break;
+                    return None;
                 }
             }
 
             assert!(node.is_leaf() && path.elem_index <= node.elements.len());
             let elem = &node.elements[path.elem_index];
             // skip empty span
-            if elem.rle_len() >= path.offset {
+            if elem.rle_len() <= path.offset {
+                path.offset -= elem.rle_len();
                 path.elem_index += 1;
-                path.offset = 0;
             } else {
-                path.offset += 1;
                 break;
             }
         }
+
+        Some(path)
     }
 
     pub fn query_with_finder_return<Q>(&self, query: &Q::QueryArg) -> (QueryResult, Q)
