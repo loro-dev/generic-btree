@@ -1,17 +1,12 @@
-# Generic B Tree
+# Generic B-Tree
 
-Goals:
+It’s a pure safe BTree that can be used to build your own special-purpose btree
+data structure. It’s mainly developed to optimize the performance of Loro CRDT’s
+components.
 
-- Rle
+It can be used to build:
+
 - Rope
-- Range Map
-  - delete given id
-  - delete a span
+- Run length encoding data structure
+- RangeMap that uses range as its key
 - BTreeSet & BTreeMap
-
-### TODO
-
-- test zero len
-- test rle
-- cursor
-- exclude root from path
