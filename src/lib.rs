@@ -793,7 +793,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    /// Update the elements in place with filter to skip nodes in advance
+    /// Update the elements in place with filter to skip subtrees in advance
     ///
     /// F should returns true if the cache need to be updated
     ///
