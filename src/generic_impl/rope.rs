@@ -1,10 +1,10 @@
 use core::ops::{Range, RangeBounds};
-use std::mem::take;
+use std::{assert_eq, dbg, mem::take};
 extern crate alloc;
 
 use alloc::string::{String, ToString};
 
-use crate::{BTree, BTreeTrait, FindResult, HeapVec, LengthFinder};
+use crate::{BTree, BTreeTrait, FindResult, HeapVec, LengthFinder, QueryResult};
 
 const MAX_ELEM_SIZE: usize = 800;
 
@@ -507,6 +507,30 @@ impl BTreeTrait for RopeTrait {
     }
 }
 
+fn test_prev_length(rope: &Rope, q: QueryResult) -> usize {
+    let mut count = 0;
+    rope.tree.visit_previous_caches(q, |cache| match cache {
+        crate::PreviousCache::NodeCache(cache) => {
+            count += *cache;
+        }
+        crate::PreviousCache::PrevSiblingElem(p) => {
+            count += p.len();
+        }
+        crate::PreviousCache::ThisElemAndOffset { offset, .. } => {
+            count += offset;
+        }
+    });
+    count
+}
+
+fn test_index(rope: &Rope) {
+    for index in 0..rope.len() {
+        let q = rope.tree.query::<LengthFinder>(&index);
+        let i = test_prev_length(rope, q);
+        assert_eq!(i, index);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -569,6 +593,7 @@ mod test {
         let mut rope = Rope::new();
         rope.insert(0, "123");
         rope.insert(1, "x");
+        test_index(&rope);
         assert_eq!(rope.len(), 4);
         rope.delete_range(2..4);
         assert_eq!(&rope.to_string(), "1x");
@@ -594,6 +619,7 @@ mod test {
         rope.insert(1, "x");
         rope.insert(2, "y");
         rope.insert(3, "z");
+        test_index(&rope);
         assert_eq!(&rope.to_string(), "1xyz23");
     }
 
@@ -629,6 +655,7 @@ mod test {
 
         rope.update_in_place(15, "kkkkk");
         assert_eq!(&rope.to_string()[10..20], "01234kkkkk");
+        test_index(&rope);
     }
 
     #[derive(Debug)]

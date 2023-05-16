@@ -1877,6 +1877,61 @@ impl<B: BTreeTrait> BTree<B> {
 
         node_a.parent_slot.cmp(&node_b.parent_slot)
     }
+
+    /// Iterate the caches of previous nodes/elements.
+    /// This method will visit as less caches as possible.
+    /// For example, if all nodes in a subtree need to be visited, we will only visit the root cache.
+    ///
+    /// f: (node_cache, previous_sibling_elem, (this_elem, offset))
+    pub fn visit_previous_caches<F>(&self, cursor: QueryResult, mut f: F)
+    where
+        F: FnMut(PreviousCache<'_, B>),
+    {
+        let path = self.get_path(cursor.leaf);
+        let mut path_index = 0;
+        let mut child_index = 0;
+        let mut node = self.get_node(path[path_index].arena);
+        'outer: loop {
+            if path_index == path.len() {
+                break;
+            }
+
+            while child_index
+                == path
+                    .get(path_index + 1)
+                    .map(|x| x.arr)
+                    .unwrap_or(cursor.elem_index)
+            {
+                path_index += 1;
+                if path_index < path.len() {
+                    node = self.get_node(path[path_index].arena);
+                    child_index = 0;
+                } else {
+                    break 'outer;
+                }
+            }
+
+            if node.is_internal() {
+                f(PreviousCache::NodeCache(&node.children[child_index].cache));
+            } else {
+                f(PreviousCache::PrevSiblingElem(&node.elements[child_index]));
+            }
+            child_index += 1;
+        }
+
+        if cursor.elem_index < node.elements.len() {
+            f(PreviousCache::ThisElemAndOffset {
+                elem: &node.elements[cursor.elem_index],
+                offset: cursor.offset,
+            });
+        }
+    }
+}
+
+pub enum PreviousCache<'a, B: BTreeTrait> {
+    NodeCache(&'a B::Cache),
+    PrevSiblingElem(&'a B::Elem),
+    ThisElemAndOffset { elem: &'a B::Elem, offset: usize },
 }
 
 #[inline(always)]

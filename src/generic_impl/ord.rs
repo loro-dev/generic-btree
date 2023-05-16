@@ -73,6 +73,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
         self.len == 0
     }
 
+    #[allow(unused)]
     pub(crate) fn check(&self) {
         self.tree.check()
     }
