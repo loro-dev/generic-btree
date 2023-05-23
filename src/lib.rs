@@ -817,6 +817,17 @@ impl<B: BTreeTrait> BTree<B> {
         let start_leaf = start.leaf;
         let mut current_leaf = start_leaf;
         let end_leaf = end.leaf;
+        if start_leaf == end_leaf {
+            self.update_leaf(start_leaf, |elems| {
+                f(MutElemArrSlice {
+                    elements: elems,
+                    start: Some((start.elem_index, start.offset)),
+                    end: Some((end.elem_index, end.offset)),
+                })
+            });
+            return;
+        }
+
         let end_path = self.get_path(end_leaf);
         let mut dirty_map: LeafDirtyMap<B::CacheDiff> = FxHashMap::default();
 
