@@ -569,34 +569,6 @@ impl<B: BTreeTrait> BTree<B> {
         // TODO: tree may still be unbalanced
     }
 
-    pub fn batch_insert_by_query_result(
-        &mut self,
-        result: &QueryResult,
-        data: impl IntoIterator<Item = B::Elem>,
-    ) where
-        B::Elem: Clone,
-    {
-        let index = result.leaf;
-        let node = self.nodes.get_mut(index).unwrap();
-        if result.found {
-            B::insert_batch(
-                &mut node.elements,
-                result.elem_index,
-                result.offset,
-                data.into_iter(),
-            );
-        } else {
-            node.elements
-                .splice(result.elem_index..result.elem_index, data);
-        }
-
-        let is_full = node.is_full();
-        self.recursive_update_cache(result.leaf, true, None);
-        if is_full {
-            self.split(result.leaf);
-        }
-    }
-
     pub fn delete<Q>(&mut self, query: &Q::QueryArg) -> Option<B::Elem>
     where
         Q: Query<B>,
@@ -717,7 +689,6 @@ impl<B: BTreeTrait> BTree<B> {
             return None;
         }
 
-        let path = self.get_path(q.leaf);
         let index = q.leaf;
         let node = self.nodes.get(index)?;
         node.elements.get(q.elem_index)
@@ -729,7 +700,6 @@ impl<B: BTreeTrait> BTree<B> {
             return None;
         }
 
-        let path = self.get_path(q.leaf);
         let index = q.leaf;
         let node = self.nodes.get_mut(index)?;
         node.elements.get_mut(q.elem_index)
