@@ -1,22 +1,4 @@
-//! # generic-btree
-//!
-//! It's a safe btree crate for versatile purposes:
-//!
-//! - Rope
-//! - BTreeMap / BTreeSet
-//! - Run-length-encoding insert/delete
-//! - Range map that uses range as key
-//!
-//! ## Write buffer
-//!
-//! This crate provides a write buffer that can be used to store updates on ancestor nodes.
-//! For example, we may need to update a range of elements in B-Tree together. Normally, it
-//! would take O(n) time to update each element, where n is the number of elements.
-//! With write buffer, we can update all elements within O(log n). And the actual updates are
-//! done when we need to iterate or query the related elements.
-//!
-//!
-
+#![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
 use core::{
@@ -142,7 +124,6 @@ pub struct BTree<B: BTreeTrait> {
     root: ArenaIndex,
     root_cache: B::Cache,
     /// this field turn true when things written into write buffer
-    need_flush: bool,
     element_move_listener: Option<MoveListener<B::Elem>>,
 }
 
@@ -153,7 +134,6 @@ impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
             nodes: self.nodes.clone(),
             root: self.root,
             root_cache: self.root_cache.clone(),
-            need_flush: false,
             element_move_listener: None,
         }
     }
@@ -496,7 +476,6 @@ impl<B: BTreeTrait> BTree<B> {
             nodes: arena,
             root,
             root_cache: B::Cache::default(),
-            need_flush: false,
             element_move_listener: None,
         }
     }
@@ -550,14 +529,12 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// NOTE: Currently this method don't guarantee after inserting many elements the tree is
     /// still balance
-    pub fn insert_many_by_query_result(
-        &mut self,
-        result: &QueryResult,
-        data: impl IntoIterator<Item = B::Elem>,
-    ) where
+    pub fn insert_many_by_query_result(&mut self, result: &QueryResult, data: Vec<B::Elem>)
+    where
         B::Elem: Clone,
     {
         let index = result.leaf;
+        self.notify_batch_move(index, &data);
         let node = self.nodes.get_mut(index).unwrap();
         B::insert_batch(&mut node.elements, result.elem_index, result.offset, data);
 
@@ -967,7 +944,9 @@ impl<B: BTreeTrait> BTree<B> {
         while !visit_set.is_empty() {
             for child_idx in take(&mut visit_set) {
                 let node = self.nodes.get(child_idx).unwrap();
-                let Some(parent_idx) = node.parent else { continue };
+                let Some(parent_idx) = node.parent else {
+                    continue;
+                };
                 let (child, parent) = self.get2_mut(child_idx, parent_idx);
                 let cache_diff = child.calc_cache(
                     &mut parent.children[child.parent_slot as usize].cache,
@@ -1336,9 +1315,17 @@ impl<B: BTreeTrait> BTree<B> {
         (a.unwrap(), b.unwrap())
     }
 
+    /// # Panic
+    ///
+    /// If the given index is not valid or deleted
     #[inline(always)]
     pub fn get_node(&self, index: ArenaIndex) -> &Node<B> {
         self.nodes.get(index).unwrap()
+    }
+
+    #[inline(always)]
+    pub fn get_node_safe(&self, index: ArenaIndex) -> Option<&Node<B>> {
+        self.nodes.get(index)
     }
 
     /// The given node is lack of children/elements.
@@ -1603,7 +1590,9 @@ impl<B: BTreeTrait> BTree<B> {
     fn purge(&mut self, index: ArenaIndex) {
         let mut stack: SmallVec<[_; 64]> = smallvec::smallvec![index];
         while let Some(x) = stack.pop() {
-            let Some(node) = self.nodes.get(x) else { continue };
+            let Some(node) = self.nodes.get(x) else {
+                continue;
+            };
             if node.is_leaf() {
                 if let Some(listener) = &mut self.element_move_listener {
                     for elem in node.elements.iter() {
@@ -1700,7 +1689,9 @@ impl<B: BTreeTrait> BTree<B> {
         let node = self.get_node(node_idx);
         let parent = self.get_node(node.parent?);
         if node.parent_slot > 0 {
-            let Some(next) = parent.children.get(node.parent_slot as usize - 1) else { unreachable!() };
+            let Some(next) = parent.children.get(node.parent_slot as usize - 1) else {
+                unreachable!()
+            };
             Some(next.arena)
         } else if let Some(parent_prev) = self.prev_same_level_node(node.parent?) {
             let parent_prev = self.get_node(parent_prev);
@@ -1825,7 +1816,7 @@ impl<B: BTreeTrait> BTree<B> {
 
     #[inline]
     /// This method only works when [`MoveListener`] listener is registered
-    pub fn notify_batch_move(&self, leaf: ArenaIndex, elements: &[B::Elem]) {
+    pub(crate) fn notify_batch_move(&self, leaf: ArenaIndex, elements: &[B::Elem]) {
         if let Some(listener) = self.element_move_listener.as_ref() {
             for elem in elements.iter() {
                 listener((leaf, elem).into());
@@ -1834,7 +1825,7 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     #[inline]
-    pub fn notify_elem_move(&self, leaf: ArenaIndex, elem: &B::Elem) {
+    pub(crate) fn notify_elem_move(&self, leaf: ArenaIndex, elem: &B::Elem) {
         if let Some(listener) = self.element_move_listener.as_ref() {
             listener((leaf, elem).into());
         }

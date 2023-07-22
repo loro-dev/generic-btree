@@ -269,7 +269,9 @@ fn handle_lack_on_path_to_leaf<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIn
         lack_count = 0;
         let path = tree.get_path(leaf);
         for i in 1..path.len() {
-            let Some(node) = tree.nodes.get(path[i].arena) else { unreachable!() };
+            let Some(node) = tree.nodes.get(path[i].arena) else {
+                unreachable!()
+            };
             let is_lack = node.is_lack();
             if is_lack {
                 let lack_info = tree.handle_lack(path[i].arena);
