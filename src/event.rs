@@ -19,7 +19,7 @@ pub struct MoveEvent<'a, T> {
 
 /// This is a event listener for element move event.
 /// It's used to track the which leaf node an element is in.
-pub type MoveListener<T> = Box<dyn Fn(MoveEvent<'_, T>)>;
+pub type MoveListener<T> = Box<dyn Fn(MoveEvent<'_, T>) + Send + Sync>;
 
 impl<'a, T> From<(ArenaIndex, &'a T)> for MoveEvent<'a, T> {
     fn from(value: (ArenaIndex, &'a T)) -> Self {

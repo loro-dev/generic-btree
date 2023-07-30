@@ -262,7 +262,12 @@ mod test {
     }
 
     mod move_event_test {
-        use std::{cell::RefCell, collections::HashMap, rc::Rc};
+        use std::{
+            cell::RefCell,
+            collections::HashMap,
+            rc::Rc,
+            sync::{Arc, Mutex},
+        };
 
         use thunderdome::Index as ArenaIndex;
 
@@ -270,16 +275,16 @@ mod test {
         #[test]
         fn test() {
             let mut tree: OrdTreeMap<u64, usize> = OrdTreeMap::new();
-            let record: Rc<RefCell<HashMap<u64, ArenaIndex>>> = Default::default();
+            let record: Arc<Mutex<HashMap<u64, ArenaIndex>>> = Default::default();
             let mut rng = rand::rngs::StdRng::seed_from_u64(123);
             let mut data: HeapVec<u64> = (0..1000).map(|_| rng.gen()).collect();
             let record_clone = record.clone();
             tree.set_listener(Some(Box::new(move |event| {
                 if let Some(leaf) = event.target_leaf {
-                    let mut record = record.borrow_mut();
+                    let mut record = record.lock().unwrap();
                     record.insert(event.elem.0, leaf);
                 } else {
-                    let mut record = record.borrow_mut();
+                    let mut record = record.lock().unwrap();
                     record.remove(&event.elem.0);
                 }
             })));
@@ -287,7 +292,7 @@ mod test {
                 tree.insert(value, 0);
             }
             {
-                let record = record_clone.borrow();
+                let record = record_clone.lock().unwrap();
                 assert_eq!(record.len(), 1000);
                 for &value in data.iter() {
                     let index = record.get(&value).unwrap();
@@ -299,7 +304,7 @@ mod test {
                 tree.delete(&value);
             }
             {
-                let record = record_clone.borrow();
+                let record = record_clone.lock().unwrap();
                 assert_eq!(record.len(), 900);
                 assert_eq!(tree.len, 900);
                 for &value in data.iter() {
@@ -312,7 +317,7 @@ mod test {
                 tree.delete(&value);
             }
             {
-                let record = record_clone.borrow();
+                let record = record_clone.lock().unwrap();
                 assert_eq!(record.len(), 100);
                 assert_eq!(tree.len, 100);
                 for &value in data.iter() {
@@ -325,7 +330,7 @@ mod test {
             for i in (0..100).rev() {
                 tree.delete(&data.pop().unwrap());
                 {
-                    let record = record_clone.borrow();
+                    let record = record_clone.lock().unwrap();
                     assert_eq!(record.len(), i);
                     assert_eq!(tree.len, i);
                     for &value in data.iter() {
