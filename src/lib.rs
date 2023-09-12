@@ -106,6 +106,9 @@ pub trait Query<B: BTreeTrait> {
         })
     }
 
+    /// It's used in [iter::Drain] iterator's drop function.
+    ///
+    /// If users drain a range on the tree, without iterating the content, this function is usd instead of `drain_range`
     #[allow(unused)]
     #[inline(always)]
     fn delete_range(
@@ -1648,6 +1651,29 @@ impl<B: BTreeTrait> BTree<B> {
             parent_next.children.first().map(|x| x.arena)
         } else {
             None
+        }
+    }
+
+    /// find the next element in the tree
+    pub fn next_elem(&self, path: QueryResult) -> Option<QueryResult> {
+        let node = self.get_node(path.leaf);
+        if path.elem_index + 1 >= node.len() {
+            match self.next_same_level_node(path.leaf) {
+                Some(next_node) => Some(QueryResult {
+                    leaf: next_node,
+                    elem_index: 0,
+                    offset: 0,
+                    found: true,
+                }),
+                None => None,
+            }
+        } else {
+            Some(QueryResult {
+                elem_index: path.elem_index + 1,
+                offset: 0,
+                found: true,
+                leaf: path.leaf,
+            })
         }
     }
 

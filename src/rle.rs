@@ -107,7 +107,7 @@ impl<T: Mergeable, B: BTreeTrait<Elem = T>> BTree<B> {
     }
 }
 
-pub fn delete_range_in_elements<T: Sliceable>(
+pub fn delete_range_in_elements<T: Sliceable + Mergeable>(
     elements: &mut HeapVec<T>,
     start: Option<QueryResult>,
     end: Option<QueryResult>,
@@ -128,7 +128,11 @@ pub fn delete_range_in_elements<T: Sliceable>(
                 } else {
                     let right = elements[from.elem_index].slice(to.offset..);
                     elements[from.elem_index].slice_(..from.offset);
-                    elements.insert(from.elem_index + 1, right);
+                    if elements[from.elem_index].can_merge(&right) {
+                        elements[from.elem_index].merge_right(&right);
+                    } else {
+                        elements.insert(from.elem_index + 1, right);
+                    }
                 }
             } else if from.offset == 0 {
                 elements.remove(from.elem_index);
