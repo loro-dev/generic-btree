@@ -324,16 +324,18 @@ pub fn insert_with_split<T: Sliceable + Mergeable>(
 
     assert!(index < elements.len());
     if offset == 0 {
-        let target = elements.get_mut(index).unwrap();
-        if elem.can_merge(target) {
-            target.merge_left(&elem);
+        if elem.can_merge(&elements[index]) {
+            elements[index].merge_left(&elem);
+        } else if index > 0 && elements.get_mut(index - 1).unwrap().can_merge(&elem) {
+            elements[index - 1].merge_right(&elem);
         } else {
             elements.insert(index, elem);
         }
     } else if offset == elements[index].rle_len() {
-        let target = elements.get_mut(index).unwrap();
-        if target.can_merge(&elem) {
-            target.merge_right(&elem);
+        if elements[index].can_merge(&elem) {
+            elements[index].merge_right(&elem);
+        } else if index + 1 < elements.len() && elem.can_merge(&elements[index + 1]) {
+            elements[index + 1].merge_left(&elem);
         } else {
             elements.insert(index + 1, elem);
         }
