@@ -1,6 +1,6 @@
-use thunderdome::Index as ArenaIndex;
+use std::mem::take;
 
-use crate::{BTree, BTreeTrait, MoveEvent, Node, NodePath, Query, QueryResult};
+use crate::{ArenaIndex, BTree, BTreeTrait, LeafNode, NodePath, QueryResult};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
@@ -10,159 +10,138 @@ pub(super) struct Iter<'a, B: BTreeTrait> {
     done: bool,
 }
 
-pub struct Drain<'a, B: BTreeTrait, Q: Query<B>> {
+pub struct Drain<'a, B: BTreeTrait> {
     tree: &'a mut BTree<B>,
     current_path: NodePath,
     done: bool,
-    start_query: Q::QueryArg,
     start_result: QueryResult,
-    end_query: Q::QueryArg,
-    end_result: QueryResult,
-
-    reversed_elements: Vec<B::Elem>,
+    end_result: Option<QueryResult>,
+    start_path: NodePath,
+    end_path: NodePath,
+    leaf_before_drain_range: Option<ArenaIndex>,
+    leaf_after_drain_range: Option<ArenaIndex>,
 }
 
-impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
+impl<'a, B: BTreeTrait> Drain<'a, B> {
     pub fn new(
         tree: &'a mut BTree<B>,
-        start_query: Q::QueryArg,
-        end_query: Q::QueryArg,
-        start_result: QueryResult,
-        end_result: QueryResult,
+        start_result: Option<QueryResult>,
+        end_result: Option<QueryResult>,
     ) -> Self {
+        if start_result.is_none() || end_result.is_none() {
+            return Self::none(tree);
+        }
+
+        let start_result = start_result.unwrap();
+        let end_result = end_result.unwrap();
+        tree.split_leaf_if_needed(end_result);
+        let end_result = tree.prefer_right(end_result);
+        tree.split_leaf_if_needed(start_result);
+        let Some(start_result) = tree.prefer_right(start_result) else {
+            // if start from the right most leaf, the range is empty
+            return Self::none(tree);
+        };
+        let start_path = tree.get_path(start_result.leaf.into());
+        let end_path = tree.get_path(
+            end_result
+                .map(|x| x.leaf.into())
+                .unwrap_or_else(|| tree.last_leaf()),
+        );
+        let leaf_before_drain_range = {
+            let node_idx = start_path.last().unwrap().arena;
+            tree.prev_same_level_in_node(node_idx)
+        };
+        let leaf_after_drain_range = {
+            let node_idx = end_path.last().unwrap().arena;
+            tree.next_same_level_in_node(node_idx)
+        };
         Self {
-            current_path: tree.get_path(start_result.leaf),
+            current_path: tree.get_path(start_result.leaf.into()),
             tree,
             done: false,
-            start_query,
-            end_query,
             start_result,
             end_result,
-            reversed_elements: Vec::new(),
+            start_path,
+            end_path,
+            leaf_before_drain_range,
+            leaf_after_drain_range,
+        }
+    }
+
+    fn none(tree: &'a mut BTree<B>) -> Drain<B> {
+        Self {
+            current_path: Default::default(),
+            done: true,
+            start_result: QueryResult {
+                leaf: tree.root.unwrap().into(),
+                offset: 0,
+                found: true,
+            },
+            end_result: None,
+            start_path: Default::default(),
+            end_path: Default::default(),
+            tree,
+            leaf_before_drain_range: None,
+            leaf_after_drain_range: None,
         }
     }
 }
 
-impl<'a, B: BTreeTrait, Q: Query<B>> Iterator for Drain<'a, B, Q> {
+impl<'a, B: BTreeTrait> Iterator for Drain<'a, B> {
     type Item = B::Elem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if let Some(next_elem) = self.reversed_elements.pop() {
-                return Some(next_elem);
-            }
+        if self.done {
+            return None;
+        }
 
-            if self.done {
+        // end iteration if pointing to the end leaf
+        if let Some(end_result) = self.end_result {
+            if end_result.leaf.0 == self.current_path.last().unwrap().arena.unwrap_leaf() {
                 return None;
             }
-
-            if self.end_result.leaf == self.current_path.last().unwrap().arena {
-                self.done = true;
-            }
-
-            let idx = *self.current_path.last().unwrap();
-            if !self.tree.next_sibling(&mut self.current_path) {
-                self.done = true;
-            }
-
-            let node = self.tree.get_mut(idx.arena);
-            let start = if idx.arena == self.start_result.leaf {
-                Some(self.start_result)
-            } else {
-                None
-            };
-            let end = if idx.arena == self.end_result.leaf {
-                Some(self.end_result)
-            } else {
-                None
-            };
-
-            let iter = Q::drain_range(
-                &mut node.elements,
-                &self.start_query,
-                &self.end_query,
-                start,
-                end,
-            );
-            for x in iter {
-                self.reversed_elements.push(x);
-            }
-
-            if let Some(listener) = self.tree.element_move_listener.as_ref() {
-                for elem in self.reversed_elements.iter() {
-                    listener(MoveEvent::new_del(elem));
-                }
-            }
-            self.reversed_elements.reverse();
-        }
-    }
-}
-
-impl<'a, B: BTreeTrait, Q: Query<B>> Drain<'a, B, Q> {
-    fn ensure_trim_start_and_end(&mut self) {
-        if self.done {
-            return;
         }
 
         let idx = *self.current_path.last().unwrap();
-        let node = self.tree.get_mut(idx.arena);
-        let start = if idx.arena == self.start_result.leaf {
-            Some(self.start_result)
-        } else {
-            None
-        };
-        let is_last = idx.arena == self.end_result.leaf;
-        let end = if is_last { Some(self.end_result) } else { None };
-
-        Q::delete_range(
-            &mut node.elements,
-            &self.start_query,
-            &self.end_query,
-            start,
-            end,
-        );
-
-        if !is_last {
-            let last = self.tree.get_mut(self.end_result.leaf);
-            Q::delete_range(
-                &mut last.elements,
-                &self.start_query,
-                &self.end_query,
-                None,
-                Some(self.end_result),
-            );
+        if !self.tree.next_sibling(&mut self.current_path) {
+            self.done = true;
         }
+
+        // NOTE: we removed the node here, the tree is in an invalid state
+        let node = self
+            .tree
+            .leaf_nodes
+            .remove(idx.arena.unwrap_leaf())
+            .unwrap();
+        return Some(node.elem);
     }
 }
 
-impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
+impl<'a, B: BTreeTrait> Drain<'a, B> {
+    fn ensure_finished(&mut self) {
+        while self.next().is_some() {}
+    }
+}
+
+impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
     fn drop(&mut self) {
-        self.ensure_trim_start_and_end();
-        let start_path = self.tree.get_path(self.start_result.leaf);
-        let end_path = self.tree.get_path(self.end_result.leaf);
-        let mut level = start_path.len() - 1;
+        self.ensure_finished();
+        // TODO: refactor, extract the following 4 fields to a single struct
+        let start_path = take(&mut self.start_path);
+        let end_path = take(&mut self.end_path);
+        let leaf_before_drain_range = take(&mut self.leaf_before_drain_range);
+        let leaf_after_drain_range = take(&mut self.leaf_after_drain_range);
+        // the deepest internal node level
+        let mut level = start_path.len() - 2;
         let mut deleted = Vec::new();
-        let leaf_before_drain_range = {
-            let node_idx = start_path[level].arena;
-            let node = self.tree.get_node(node_idx);
-            if node.is_empty() {
-                self.tree.prev_same_level_node(node_idx)
-            } else {
-                Some(node_idx)
-            }
-        };
-        let leaf_after_drain_range = {
-            let node_idx = end_path[level].arena;
-            let node = self.tree.get_node(node_idx);
-            if node.is_empty() {
-                self.tree.next_same_level_node(node_idx)
-            } else {
-                Some(node_idx)
-            }
-        };
+
+        // The deepest internal node level, need to filter deleted children
+        // to ensure is_empty() has correct result
+        self.tree.filter_deleted_children(start_path[level].arena);
+        self.tree.filter_deleted_children(end_path[level].arena);
         while start_path[level].arena != end_path[level].arena {
-            let start_node = self.tree.get_node(start_path[level].arena);
-            let end_node = self.tree.get_node(end_path[level].arena);
+            let start_node = self.tree.get_internal_node(start_path[level].arena);
+            let end_node = self.tree.get_internal_node(end_path[level].arena);
             let del_start = if start_node.is_empty() {
                 start_path[level].arr
             } else {
@@ -173,11 +152,14 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             } else {
                 end_path[level].arr
             };
+
+            // remove del_start.. in start_node's parent
+            // remove   ..del_end in end_node's   parent
             let start_arena = start_path[level - 1].arena;
             let end_arena = end_path[level - 1].arena;
             if start_arena == end_arena {
                 // parent is the same, delete start..end
-                let parent = self.tree.get_mut(start_arena);
+                let parent = self.tree.get_internal_mut(start_arena);
                 for x in parent.children.drain(del_start..del_end) {
                     deleted.push(x.arena);
                 }
@@ -187,14 +169,14 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
                 // parent is different
                 {
                     // delete start..
-                    let start_parent = self.tree.get_mut(start_arena);
+                    let start_parent = self.tree.get_internal_mut(start_arena);
                     for x in start_parent.children.drain(del_start..) {
                         deleted.push(x.arena);
                     }
                 }
                 {
                     // delete ..end
-                    let end_parent = self.tree.get_mut(end_arena);
+                    let end_parent = self.tree.get_internal_mut(end_arena);
                     for x in end_parent.children.drain(..del_end) {
                         deleted.push(x.arena);
                     }
@@ -203,7 +185,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
             }
 
             level -= 1
-            // this loop would break since level=0 is guaranteed to be the same
+            // this loop will abort before overflow, because level=0 is guaranteed to be the same
         }
 
         while level >= 1 {
@@ -256,7 +238,7 @@ impl<'a, B: BTreeTrait, Q: Query<B>> Drop for Drain<'a, B, Q> {
 
 fn seal<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIndex) {
     handle_lack_on_path_to_leaf(tree, leaf);
-    if let Some(sibling) = tree.next_same_level_node(leaf) {
+    if let Some(sibling) = tree.next_same_level_in_node(leaf) {
         handle_lack_on_path_to_leaf(tree, sibling);
     }
     tree.try_reduce_levels();
@@ -268,8 +250,8 @@ fn handle_lack_on_path_to_leaf<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIn
     loop {
         lack_count = 0;
         let path = tree.get_path(leaf);
-        for i in 1..path.len() {
-            let Some(node) = tree.nodes.get(path[i].arena) else {
+        for i in 1..path.len() - 1 {
+            let Some(node) = tree.in_nodes.get(path[i].arena.unwrap_internal()) else {
                 unreachable!()
             };
             let is_lack = node.is_lack();
@@ -301,7 +283,7 @@ impl<'a, B: BTreeTrait> Iter<'a, B> {
 }
 
 impl<'a, B: BTreeTrait> Iterator for Iter<'a, B> {
-    type Item = (NodePath, &'a Node<B>);
+    type Item = (NodePath, &'a LeafNode<B::Elem>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.done {
@@ -318,7 +300,7 @@ impl<'a, B: BTreeTrait> Iterator for Iter<'a, B> {
             self.done = true;
         }
 
-        let node = self.tree.get_node(last.arena);
+        let node = self.tree.leaf_nodes.get(last.arena.unwrap_leaf()).unwrap();
         Some((path, node))
     }
 }

@@ -1,7 +1,7 @@
 [package]
 name = "generic-btree"
 author = "Zixuan Chen"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Generic BTree for versatile purposes"
 readme = "README.md"
@@ -17,6 +17,7 @@ documentation = "https://docs.rs/generic-btree"
 
 [dependencies]
 fxhash = "0.2.1"
+proc-macro2 = "1.0.67"
 smallvec = { version = "1.10.0", features = [] }
 thunderdome = { version = "0.6.0", features = [] }
 
@@ -29,9 +30,9 @@ rand = "0.8.5"
 color-backtrace = "0.5.1"
 ctor = "0.1.26"
 pprof = { version = "0.11.1", features = [
-  "flamegraph",
-  "criterion",
-  "frame-pointer",
+    "flamegraph",
+    "criterion",
+    "frame-pointer",
 ] }
 serde_json = "1.0.93"
 flate2 = "1.0.25"

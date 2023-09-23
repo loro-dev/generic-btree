@@ -1,4 +1,5 @@
-use crate::{BTreeTrait, FindResult, HeapVec, Query, QueryResult};
+use crate::{BTreeTrait, FindResult, Query};
+use crate::rle::HasLength;
 
 /// A generic length finder
 pub struct LengthFinder {
@@ -19,62 +20,9 @@ impl Default for LengthFinder {
 
 pub trait UseLengthFinder<B: BTreeTrait> {
     fn get_len(cache: &B::Cache) -> usize;
-    fn find_element_by_offset(
-        elements: &[<B as BTreeTrait>::Elem],
-        offset: usize,
-    ) -> crate::FindResult;
-
-    #[allow(unused)]
-    fn finder_delete(
-        elements: &mut HeapVec<B::Elem>,
-        elem_index: usize,
-        offset: usize,
-    ) -> Option<B::Elem> {
-        if elem_index >= elements.len() {
-            return None;
-        }
-
-        Some(elements.remove(elem_index))
-    }
-
-    #[allow(unused)]
-    fn finder_drain_range(
-        elements: &mut HeapVec<B::Elem>,
-        start: Option<QueryResult>,
-        end: Option<QueryResult>,
-    ) -> Box<dyn Iterator<Item = B::Elem> + '_> {
-        Box::new(match (start, end) {
-            (None, None) => elements.drain(..),
-            (None, Some(to)) => elements.drain(..to.elem_index),
-            (Some(from), None) => elements.drain(from.elem_index..),
-            (Some(from), Some(to)) => elements.drain(from.elem_index..to.elem_index),
-        })
-    }
-
-    #[allow(unused)]
-    fn finder_delete_range(
-        elements: &mut HeapVec<B::Elem>,
-        start: Option<QueryResult>,
-        end: Option<QueryResult>,
-    ) {
-        match (start, end) {
-            (None, None) => {
-                elements.clear();
-            }
-            (None, Some(to)) => {
-                elements.drain(..to.elem_index);
-            }
-            (Some(from), None) => {
-                elements.drain(from.elem_index..);
-            }
-            (Some(from), Some(to)) => {
-                elements.drain(from.elem_index..to.elem_index);
-            }
-        };
-    }
 }
 
-impl<Elem: 'static, B: BTreeTrait<Elem = Elem> + UseLengthFinder<B>> Query<B> for LengthFinder {
+impl<Elem: 'static + HasLength, B: BTreeTrait<Elem=Elem> + UseLengthFinder<B>> Query<B> for LengthFinder {
     type QueryArg = usize;
 
     #[inline(always)]
@@ -102,41 +50,7 @@ impl<Elem: 'static, B: BTreeTrait<Elem = Elem> + UseLengthFinder<B>> Query<B> fo
         FindResult::new_missing(child_caches.len() - 1, last_left)
     }
 
-    #[inline]
-    fn find_element(
-        &mut self,
-        _: &Self::QueryArg,
-        elements: &[<B as BTreeTrait>::Elem],
-    ) -> crate::FindResult {
-        B::find_element_by_offset(elements, self.left)
-    }
-
-    fn delete(
-        elements: &mut crate::HeapVec<<B as BTreeTrait>::Elem>,
-        _: &Self::QueryArg,
-        elem_index: usize,
-        offset: usize,
-    ) -> Option<<B as BTreeTrait>::Elem> {
-        B::finder_delete(elements, elem_index, offset)
-    }
-
-    fn drain_range<'a, 'b>(
-        elements: &'a mut crate::HeapVec<<B as BTreeTrait>::Elem>,
-        _: &'b Self::QueryArg,
-        _: &'b Self::QueryArg,
-        start: Option<crate::QueryResult>,
-        end: Option<crate::QueryResult>,
-    ) -> Box<dyn Iterator<Item = <B as BTreeTrait>::Elem> + 'a> {
-        B::finder_drain_range(elements, start, end)
-    }
-
-    fn delete_range(
-        elements: &mut HeapVec<<B as BTreeTrait>::Elem>,
-        _: &Self::QueryArg,
-        _: &Self::QueryArg,
-        start: Option<QueryResult>,
-        end: Option<QueryResult>,
-    ) {
-        B::finder_delete_range(elements, start, end)
+    fn confirm_elem(&self, q: &Self::QueryArg, elem: &<B as BTreeTrait>::Elem) -> (usize, bool) {
+        (self.left, self.left < elem.rle_len())
     }
 }

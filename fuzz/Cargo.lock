@@ -48,9 +48,10 @@ dependencies = [
 
 [[package]]
 name = "generic-btree"
-version = "0.3.1"
+version = "0.6.0"
 dependencies = [
  "fxhash",
+ "proc-macro2",
  "smallvec",
  "thunderdome",
 ]
@@ -98,9 +99,9 @@ checksum = "6f61fba1741ea2b3d6a1e3178721804bb716a68a6aeba1149b5d52e3d464ea66"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.51"
+version = "1.0.67"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d727cae5b39d21da60fa540906919ad737832fe0b1c165da3a34d6548c849d6"
+checksum = "3d433d9f1a3e8c1263d9456598b16fec66f4acc9a74dacffd35c7bb09b3a1328"
 dependencies = [
  "unicode-ident",
 ]

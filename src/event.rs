@@ -1,3 +1,4 @@
+use crate::LeafIndex;
 use thunderdome::Index as ArenaIndex;
 
 /// The move event of an element.
@@ -13,7 +14,7 @@ use thunderdome::Index as ArenaIndex;
 #[derive(Debug, Clone)]
 pub struct MoveEvent<'a, T> {
     /// If this is None, it means the element is deleted from the tree
-    pub target_leaf: Option<ArenaIndex>,
+    pub target_leaf: Option<LeafIndex>,
     pub elem: &'a T,
 }
 
@@ -21,8 +22,8 @@ pub struct MoveEvent<'a, T> {
 /// It's used to track the which leaf node an element is in.
 pub type MoveListener<T> = Box<dyn Fn(MoveEvent<'_, T>) + Send + Sync>;
 
-impl<'a, T> From<(ArenaIndex, &'a T)> for MoveEvent<'a, T> {
-    fn from(value: (ArenaIndex, &'a T)) -> Self {
+impl<'a, T> From<(LeafIndex, &'a T)> for MoveEvent<'a, T> {
+    fn from(value: (LeafIndex, &'a T)) -> Self {
         Self {
             target_leaf: Some(value.0),
             elem: value.1,
@@ -38,7 +39,7 @@ impl<'a, T> MoveEvent<'a, T> {
         }
     }
 
-    pub fn new_move(to_leaf: ArenaIndex, elem: &'a T) -> Self {
+    pub fn new_move(to_leaf: LeafIndex, elem: &'a T) -> Self {
         Self {
             target_leaf: Some(to_leaf),
             elem,
