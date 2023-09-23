@@ -67,7 +67,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
             } else {
                 // Insert new leaf node
                 let child = tree.alloc_leaf_child(data, parent.unwrap_internal());
-                let (parent, _, insert_index) = tree.split_leaf_if_needed(result);
+                let (_, parent, _, insert_index) = tree.split_leaf_if_needed(result);
                 parent.children.insert(insert_index, child);
                 is_full = parent.is_full();
             }

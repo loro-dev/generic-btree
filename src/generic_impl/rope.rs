@@ -304,7 +304,7 @@ impl Rope {
         } else {
             let data = RopeElem::from_str(elem);
             let child = tree.alloc_leaf_child(data, parent_idx.unwrap());
-            let (parent, _, insert_index) = tree.split_leaf_if_needed(pos);
+            let (_, parent, _, insert_index) = tree.split_leaf_if_needed(pos);
             // Insert new leaf node
             parent.children.insert(insert_index, child);
             is_full = parent.is_full();

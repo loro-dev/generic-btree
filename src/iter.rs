@@ -34,10 +34,8 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
 
         let start_result = start_result.unwrap();
         let end_result = end_result.unwrap();
-        tree.split_leaf_if_needed(end_result);
-        let end_result = tree.prefer_right(end_result);
-        tree.split_leaf_if_needed(start_result);
-        let Some(start_result) = tree.prefer_right(start_result) else {
+        let end_result = tree.split_leaf_if_needed(end_result).0;
+        let Some(start_result) = tree.split_leaf_if_needed(start_result).0 else {
             // if start from the right most leaf, the range is empty
             return Self::none(tree);
         };

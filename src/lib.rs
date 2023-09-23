@@ -515,7 +515,7 @@ impl<B: BTreeTrait> BTree<B> {
         } else {
             // Insert new leaf node
             let child = self.alloc_leaf_child(data, parent_idx.unwrap());
-            let (parent, _, insert_index) = self.split_leaf_if_needed(result);
+            let (_, parent, _, insert_index) = self.split_leaf_if_needed(result);
             parent.children.insert(insert_index, child);
             is_full = parent.is_full();
         }
@@ -547,12 +547,13 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// This method should be called when inserting at target pos.
     ///
-    /// Returns the parent node, the arena index of the parent node, and the insert pos in parent children.
-    fn split_leaf_if_needed(&mut self, pos: QueryResult) -> (&mut Node<B>, RawArenaIndex, usize) {
+    /// Returns new_pos, the parent node, the arena index of the parent node, and the insert pos in parent children.
+    fn split_leaf_if_needed(&mut self, pos: QueryResult) -> (Option<QueryResult>, &mut Node<B>, RawArenaIndex, usize) {
         // FIXME: notify leaf move
         let leaf = self.leaf_nodes.get_mut(pos.leaf.0).unwrap();
         let parent_idx = leaf.parent;
         let parent = self.in_nodes.get_mut(leaf.parent).unwrap();
+        let mut new_pos = Some(pos);
         let leaf_slot = parent
             .children
             .iter()
@@ -561,6 +562,15 @@ impl<B: BTreeTrait> BTree<B> {
         let insert_pos = if pos.offset == 0 {
             leaf_slot
         } else if pos.offset == leaf.elem.rle_len() {
+            if leaf_slot + 1 < parent.children.len() {
+                new_pos = Some(QueryResult {
+                    leaf: parent.children[leaf_slot + 1].arena.unwrap().into(),
+                    offset: 0,
+                    found: true,
+                });
+            } else {
+                new_pos = self.next_elem(pos);
+            }
             leaf_slot + 1
         } else {
             assert!(pos.offset < leaf.elem.rle_len(), "elem.rle_len={} but pos.offset={} Elem:{:?}", leaf.elem.rle_len(), pos.offset, &leaf.elem);
@@ -579,6 +589,11 @@ impl<B: BTreeTrait> BTree<B> {
                 }
                 ArenaIndex::Leaf(arena_index)
             };
+            new_pos = Some(QueryResult {
+                leaf: leaf_arena_index.unwrap().into(),
+                offset: 0,
+                found: true,
+            });
             parent.children.insert(
                 leaf_slot + 1,
                 Child {
@@ -588,7 +603,8 @@ impl<B: BTreeTrait> BTree<B> {
             );
             leaf_slot + 1
         };
-        (parent, parent_idx, insert_pos)
+        let parent = self.in_nodes.get_mut(parent_idx).unwrap();
+        (new_pos, parent, parent_idx, insert_pos)
     }
 
     fn alloc_new_leaf(&mut self, leaf: LeafNode<B::Elem>) -> ArenaIndex {
@@ -614,7 +630,7 @@ impl<B: BTreeTrait> BTree<B> {
         where
             B::Elem: Clone,
     {
-        let (parent, parent_index, insert_index) = self.split_leaf_if_needed(result);
+        let (_, parent, parent_index, insert_index) = self.split_leaf_if_needed(result);
         let mut children = take(&mut parent.children);
         children.splice(
             insert_index..insert_index,
@@ -2055,11 +2071,11 @@ impl<B: BTreeTrait> BTree<B> {
                 assert_eq!(index, self.root.unwrap_internal())
             }
 
-            // if index != self.root.unwrap() {
-            //     assert!(!node.is_lack(), "len={}\n", node.len());
-            // }
-            //
-            // assert!(!node.is_full(), "len={}", node.len());
+            if index != self.root.unwrap() {
+                assert!(!node.is_lack(), "len={}\n", node.len());
+            }
+
+            assert!(!node.is_full(), "len={}", node.len());
         }
 
         for (leaf_index, leaf_node) in self.leaf_nodes.iter() {
