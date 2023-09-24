@@ -22,14 +22,14 @@ pub struct Rope {
 impl UseLengthFinder<RopeTrait> for RopeTrait {
     #[inline(always)]
     fn get_len(cache: &<Self as BTreeTrait>::Cache) -> usize {
-        *cache
+        *cache as usize
     }
 }
 
 impl Rope {
     #[inline]
     pub fn len(&self) -> usize {
-        self.tree.root_cache
+        self.tree.root_cache as usize
     }
 
     #[inline]
@@ -204,8 +204,9 @@ impl ToString for Rope {
 
 impl BTreeTrait for RopeTrait {
     type Elem = GapBuffer;
-    type Cache = usize;
+    type Cache = isize;
 
+    #[inline(always)]
     fn calc_cache_internal(
         cache: &mut Self::Cache,
         caches: &[crate::Child<Self>],
@@ -213,12 +214,12 @@ impl BTreeTrait for RopeTrait {
     ) -> Option<isize> {
         match diff {
             Some(diff) => {
-                *cache = (*cache as isize + diff) as usize;
+                *cache += diff;
                 Some(diff)
             }
             None => {
-                let new_cache = caches.iter().map(|x| x.cache).sum::<usize>();
-                let diff = new_cache as isize - *cache as isize;
+                let new_cache = caches.iter().map(|x| x.cache).sum::<isize>();
+                let diff = new_cache  - *cache;
                 *cache = new_cache;
                 Some(diff)
             }
@@ -231,8 +232,9 @@ impl BTreeTrait for RopeTrait {
         *diff1 += diff2;
     }
 
+    #[inline(always)]
     fn get_elem_cache(elem: &Self::Elem) -> Self::Cache {
-        elem.len()
+        elem.len() as isize
     }
 }
 
@@ -240,13 +242,13 @@ fn test_prev_length(rope: &Rope, q: QueryResult) -> usize {
     let mut count = 0;
     rope.tree.visit_previous_caches(q, |cache| match cache {
         crate::PreviousCache::NodeCache(cache) => {
-            count += *cache;
+            count += *cache as usize;
         }
         crate::PreviousCache::PrevSiblingElem(p) => {
-            count += p.len();
+            count += p.len() ;
         }
         crate::PreviousCache::ThisElemAndOffset { offset, .. } => {
-            count += offset;
+            count += offset ;
         }
     });
     count

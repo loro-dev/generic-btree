@@ -9,7 +9,6 @@ mod test_range_num_map {
     fn basic() {
         let mut range_map = RangeNumMap::new();
         range_map.insert(1..10, 0);
-        dbg!(&range_map);
         assert_eq!(range_map.get(0), None);
         assert_eq!(range_map.get(7), Some(0));
         assert_eq!(range_map.get(8), Some(0));

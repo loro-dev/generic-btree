@@ -30,8 +30,12 @@ pub type HeapVec<T> = Vec<T>;
 
 const MAX_CHILDREN_NUM: usize = 16;
 
+// TODO: Cache cursor
+
 /// `Elem` should has length. `offset` in search result should always >= `Elem.rle_len()`
 pub trait BTreeTrait {
+    // TODO: Speed up insertions by get cache_diff from elem
+    // TODO: We may always use cache diff
     type Elem: Debug + HasLength + Sliceable + Mergeable;
     type Cache: Debug + Default + Clone + Eq;
     type CacheDiff: Debug;
@@ -90,6 +94,7 @@ pub struct FindResult {
 }
 
 impl FindResult {
+    #[inline(always)]
     pub fn new_found(index: usize, offset: usize) -> Self {
         Self {
             index,
@@ -98,6 +103,7 @@ impl FindResult {
         }
     }
 
+    #[inline(always)]
     pub fn new_missing(index: usize, offset: usize) -> Self {
         Self {
             index,
@@ -394,6 +400,7 @@ impl<B: BTreeTrait> Child<B> {
         &self.cache
     }
 
+    #[inline(always)]
     fn new(arena: ArenaIndex, cache: B::Cache) -> Self {
         Self { arena, cache }
     }
@@ -754,13 +761,13 @@ impl<B: BTreeTrait> BTree<B> {
             return (None, finder);
         }
 
-        let mut node = self.in_nodes.get(self.root.unwrap_internal()).unwrap();
+        let mut node = self.in_nodes.get(self.root.unwrap()).unwrap();
         let mut index;
         let mut found = true;
         loop {
             let result = finder.find_node(query, &node.children);
             debug_assert!(!node.children.is_empty());
-            let i = result.index.min(node.children.len() - 1);
+            let i = result.index;
             found = found && result.found;
             index = node.children[i].arena;
             match index {
@@ -791,6 +798,7 @@ impl<B: BTreeTrait> BTree<B> {
         Some(&mut node.elem)
     }
 
+    #[inline(always)]
     pub fn get_elem(&self, leaf: LeafIndex) -> Option<&<B as BTreeTrait>::Elem> {
         self.leaf_nodes.get(leaf.0).map(|x| &x.elem)
     }

@@ -54,6 +54,7 @@ impl<Elem: 'static + HasLength + Debug, B: BTreeTrait<Elem = Elem> + UseLengthFi
         FindResult::new_missing(child_caches.len() - 1, last_left)
     }
 
+    #[inline(always)]
     fn confirm_elem(&self, q: &Self::QueryArg, elem: &<B as BTreeTrait>::Elem) -> (usize, bool) {
         (self.left, self.left < elem.rle_len())
     }

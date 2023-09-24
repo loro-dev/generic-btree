@@ -97,6 +97,7 @@ fn bench(actions: Vec<TextAction>) {
                 rope.insert(action.pos, &action.ins)
             }
         }
+        // println!("{}", rope.to_string());
         // rope.diagnose();
     }
 }
