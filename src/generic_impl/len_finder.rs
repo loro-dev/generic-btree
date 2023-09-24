@@ -1,3 +1,5 @@
+use std::fmt::Debug;
+
 use crate::{BTreeTrait, FindResult, Query};
 use crate::rle::HasLength;
 
@@ -22,7 +24,9 @@ pub trait UseLengthFinder<B: BTreeTrait> {
     fn get_len(cache: &B::Cache) -> usize;
 }
 
-impl<Elem: 'static + HasLength, B: BTreeTrait<Elem=Elem> + UseLengthFinder<B>> Query<B> for LengthFinder {
+impl<Elem: 'static + HasLength + Debug, B: BTreeTrait<Elem=Elem> + UseLengthFinder<B>> Query<B>
+for LengthFinder
+{
     type QueryArg = usize;
 
     #[inline(always)]

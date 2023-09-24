@@ -1,5 +1,3 @@
-use std::mem::take;
-
 use crate::{ArenaIndex, BTree, BTreeTrait, LeafNode, NodePath, QueryResult};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
@@ -10,16 +8,20 @@ pub(super) struct Iter<'a, B: BTreeTrait> {
     done: bool,
 }
 
+struct TempStore {
+    start_path: NodePath,
+    end_path: NodePath,
+    leaf_before_drain_range: Option<ArenaIndex>,
+    leaf_after_drain_range: Option<ArenaIndex>,
+}
+
 pub struct Drain<'a, B: BTreeTrait> {
     tree: &'a mut BTree<B>,
     current_path: NodePath,
     done: bool,
     start_result: QueryResult,
     end_result: Option<QueryResult>,
-    start_path: NodePath,
-    end_path: NodePath,
-    leaf_before_drain_range: Option<ArenaIndex>,
-    leaf_after_drain_range: Option<ArenaIndex>,
+    store: Option<Box<TempStore>>,
 }
 
 impl<'a, B: BTreeTrait> Drain<'a, B> {
@@ -59,10 +61,12 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
             done: false,
             start_result,
             end_result,
-            start_path,
-            end_path,
-            leaf_before_drain_range,
-            leaf_after_drain_range,
+            store: Some(Box::new(TempStore {
+                start_path,
+                end_path,
+                leaf_before_drain_range,
+                leaf_after_drain_range,
+            })),
         }
     }
 
@@ -76,11 +80,8 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
                 found: true,
             },
             end_result: None,
-            start_path: Default::default(),
-            end_path: Default::default(),
             tree,
-            leaf_before_drain_range: None,
-            leaf_after_drain_range: None,
+            store: None,
         }
     }
 }
@@ -111,7 +112,7 @@ impl<'a, B: BTreeTrait> Iterator for Drain<'a, B> {
             .leaf_nodes
             .remove(idx.arena.unwrap_leaf())
             .unwrap();
-        return Some(node.elem);
+        Some(node.elem)
     }
 }
 
@@ -125,10 +126,12 @@ impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
     fn drop(&mut self) {
         self.ensure_finished();
         // TODO: refactor, extract the following 4 fields to a single struct
-        let start_path = take(&mut self.start_path);
-        let end_path = take(&mut self.end_path);
-        let leaf_before_drain_range = take(&mut self.leaf_before_drain_range);
-        let leaf_after_drain_range = take(&mut self.leaf_after_drain_range);
+        let TempStore {
+            start_path,
+            end_path,
+            leaf_before_drain_range,
+            leaf_after_drain_range,
+        } = *self.store.take().unwrap();
         // the deepest internal node level
         let mut level = start_path.len() - 2;
         let mut deleted = Vec::new();

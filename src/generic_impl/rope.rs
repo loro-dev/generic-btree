@@ -1,255 +1,19 @@
 extern crate alloc;
 
 use alloc::string::{String, ToString};
-use core::ops::{Range, RangeBounds};
-use std::{assert_eq, mem::take};
+use core::ops::RangeBounds;
+use std::assert_eq;
 
 use crate::{BTree, BTreeTrait, LengthFinder, QueryResult};
 use crate::rle::{HasLength, Mergeable, Sliceable};
 
+use super::gap_buffer::GapBuffer;
 use super::len_finder::UseLengthFinder;
 
-const MAX_ELEM_SIZE: usize = 800;
+const MAX_LEN: usize = 100;
 
 #[derive(Debug)]
 struct RopeTrait;
-
-#[derive(Debug, Clone)]
-struct RopeElem {
-    left: Vec<u8>,
-    /// this stored the reversed u8 of the right part
-    right: Vec<u8>,
-}
-
-impl Mergeable for RopeElem {
-    fn can_merge(&self, rhs: &Self) -> bool {
-        self.len() + rhs.len() < rhs.capacity().min(self.capacity())
-    }
-
-    fn merge_right(&mut self, rhs: &Self) {
-        let (a, b) = rhs.as_bytes();
-        self.push_bytes(a);
-        self.push_bytes(b);
-    }
-
-    fn merge_left(&mut self, left: &Self) {
-        let (a, b) = left.as_bytes();
-        self.shift_at(0);
-        self.left.extend_from_slice(a);
-        self.right.extend_from_slice(b);
-    }
-}
-
-impl HasLength for RopeElem {
-    fn rle_len(&self) -> usize {
-        self.len()
-    }
-}
-
-impl Sliceable for RopeElem {
-    fn slice(&self, range: impl RangeBounds<usize>) -> Self {
-        let mut result = Self::with_capacity(self.len());
-        let start = match range.start_bound() {
-            std::ops::Bound::Included(&pos) => pos,
-            std::ops::Bound::Excluded(&pos) => pos + 1,
-            std::ops::Bound::Unbounded => 0,
-        };
-        let end = match range.end_bound() {
-            std::ops::Bound::Included(&pos) => pos + 1,
-            std::ops::Bound::Excluded(&pos) => pos,
-            std::ops::Bound::Unbounded => self.len(),
-        };
-        for i in start..end {
-            result.push(self.get(i));
-        }
-        result
-    }
-}
-
-impl RopeElem {
-    #[inline(always)]
-    fn len(&self) -> usize {
-        self.left.len() + self.right.len()
-    }
-
-    #[inline(always)]
-    fn capacity(&self) -> usize {
-        self.left.capacity()
-    }
-
-    #[inline(always)]
-    fn new() -> Self {
-        Self {
-            left: Vec::new(),
-            right: Vec::new(),
-        }
-    }
-
-    fn from_str(s: &str) -> Self {
-        let mut left = Vec::with_capacity(closest_2_power(s.len()));
-        let right = Vec::new();
-        for c in s.as_bytes() {
-            left.push(*c);
-        }
-        Self { left, right }
-    }
-
-    #[inline(always)]
-    fn with_capacity(capacity: usize) -> Self {
-        Self {
-            left: Vec::with_capacity(capacity),
-            right: Vec::with_capacity(capacity),
-        }
-    }
-
-    fn insert(&mut self, pos: usize, new: &[u8]) {
-        self.shift_at(pos);
-        self.left.extend_from_slice(new);
-    }
-
-    fn push(&mut self, new: u8) {
-        self.shift_at(self.len());
-        self.left.push(new);
-    }
-
-    fn delete(&mut self, range: impl RangeBounds<usize>) -> usize {
-        let start = match range.start_bound() {
-            std::ops::Bound::Included(&pos) => pos,
-            std::ops::Bound::Excluded(&pos) => pos + 1,
-            std::ops::Bound::Unbounded => 0,
-        };
-        let end = match range.end_bound() {
-            std::ops::Bound::Included(&pos) => pos + 1,
-            std::ops::Bound::Excluded(&pos) => pos,
-            std::ops::Bound::Unbounded => self.len(),
-        };
-        self.shift_at(end);
-        let mut deleted = 0;
-        let len = end - start;
-        while deleted < len && !self.left.is_empty() {
-            self.left.pop();
-            deleted += 1;
-        }
-        deleted
-    }
-
-    fn drain(&mut self, range: Range<usize>) -> Vec<u8> {
-        self.shift_at(range.start);
-        let mut deleted = 0;
-        let mut result = Vec::with_capacity(range.len());
-        while deleted < range.len() && !self.right.is_empty() {
-            result.push(self.right.pop().unwrap());
-            deleted += 1;
-        }
-        result
-    }
-
-    fn split_right(&mut self, at: usize) -> Self {
-        self.shift_at(at);
-        let mut next_left = take(&mut self.right);
-        next_left.reverse();
-        Self {
-            left: next_left,
-            right: Vec::new(),
-        }
-    }
-
-    fn split_left(&mut self, at: usize) -> Self {
-        self.shift_at(at);
-        let prev_left = take(&mut self.left);
-        Self {
-            left: prev_left,
-            right: Vec::new(),
-        }
-    }
-
-    fn shift_at(&mut self, pos: usize) {
-        match pos.cmp(&self.left.len()) {
-            std::cmp::Ordering::Less => {
-                if self.right.capacity() < self.left.capacity() {
-                    self.right
-                        .reserve(self.left.capacity() - self.right.capacity());
-                }
-                while pos != self.left.len() {
-                    self.right.push(self.left.pop().unwrap())
-                }
-            }
-            std::cmp::Ordering::Greater => {
-                if self.left.capacity() < self.right.capacity() {
-                    self.left
-                        .reserve(self.right.capacity() - self.left.capacity());
-                }
-                while pos != self.left.len() {
-                    self.left.push(self.right.pop().unwrap())
-                }
-            }
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-
-    #[inline]
-    fn get(&self, pos: usize) -> u8 {
-        if pos < self.left.len() {
-            self.left[pos]
-        } else {
-            self.right[self.right.len() - (pos - self.left.len()) - 1]
-        }
-    }
-
-    #[inline]
-    fn set(&mut self, pos: usize, value: u8) {
-        if pos < self.left.len() {
-            self.left[pos] = value;
-        } else {
-            let len = self.right.len();
-            self.right[len - (pos - self.left.len())] = value;
-        }
-    }
-
-    #[inline]
-    fn append(&mut self, rhs: &RopeElem) {
-        self.shift_at(self.len());
-        for i in 0..rhs.len() {
-            self.left.push(rhs.get(i));
-        }
-    }
-
-    fn prepend(&mut self, lhs: &RopeElem) {
-        self.shift_at(0);
-        for i in (0..lhs.len()).rev() {
-            self.right.push(lhs.get(i));
-        }
-    }
-
-    fn prepend_bytes(&mut self, bytes: &[u8]) {
-        self.shift_at(0);
-        for i in (0..bytes.len()).rev() {
-            self.right.push(bytes[i]);
-        }
-    }
-
-    /// return (left, right)
-    /// NOTE: right is reversed
-    fn as_bytes(&self) -> (&[u8], &[u8]) {
-        (&self.left, &self.right)
-    }
-
-    fn iter(&self) -> impl Iterator<Item=u8> + '_ {
-        self.left
-            .iter()
-            .copied()
-            .chain(self.right.iter().copied().rev())
-    }
-
-    fn to_string(&self) -> String {
-        String::from_utf8(self.iter().collect::<Vec<u8>>()).unwrap()
-    }
-
-    fn push_bytes(&mut self, as_bytes: &[u8]) {
-        self.shift_at(self.len());
-        self.left.extend_from_slice(as_bytes);
-    }
-}
 
 fn closest_2_power(x: usize) -> usize {
     let mut result = 8;
@@ -283,8 +47,12 @@ impl Rope {
     }
 
     pub fn insert(&mut self, index: usize, elem: &str) {
+        if index > self.len() {
+            panic!("index {} out of range len={}", index, self.len());
+        }
+
         let Some(pos) = self.tree.query::<LengthFinder>(&index) else {
-            self.tree.push(RopeElem::from_str(elem));
+            self.tree.push(GapBuffer::from_str(elem));
             return;
         };
 
@@ -295,14 +63,10 @@ impl Rope {
 
         let mut is_full = false;
         // Try to merge
-        if pos.offset == 0 && leaf.elem.capacity() > leaf.elem.len() + elem.len() {
-            leaf.elem.prepend_bytes(elem.as_bytes());
-        } else if pos.offset == leaf.elem.len()
-            && leaf.elem.capacity() > leaf.elem.len() + elem.len()
-        {
-            leaf.elem.push_bytes(elem.as_bytes());
+        if leaf.elem.len() + elem.len() < MAX_LEN {
+            leaf.elem.insert_bytes(pos.offset, elem.as_bytes());
         } else {
-            let data = RopeElem::from_str(elem);
+            let data = GapBuffer::from_str(elem);
             let child = tree.alloc_leaf_child(data, parent_idx.unwrap());
             let (_, parent, _, insert_index) = tree.split_leaf_if_needed(pos);
             // Insert new leaf node
@@ -332,10 +96,31 @@ impl Rope {
         if start == end {
             return;
         }
-        self.tree.drain::<LengthFinder>(start..end);
+
+        let from = self.tree.query::<LengthFinder>(&start);
+        let to = self.tree.query::<LengthFinder>(&end);
+        match (from, to) {
+            (Some(from), Some(to)) if from.leaf == to.leaf => {
+                let leaf = self.tree.leaf_nodes.get_mut(from.leaf.0).unwrap();
+                if from.offset == 0 && to.offset == leaf.elem.len() {
+                    // delete the whole leaf
+                    self.tree.remove_leaf(from);
+                } else {
+                    leaf.elem.delete(from.offset..to.offset);
+                    self.tree.recursive_update_cache(
+                        from.leaf.into(),
+                        true,
+                        Some(start as isize - end as isize),
+                    );
+                }
+            }
+            _ => {
+                crate::iter::Drain::new(&mut self.tree, from, to);
+            }
+        }
     }
 
-    fn iter(&self) -> impl Iterator<Item=&RopeElem> {
+    fn iter(&self) -> impl Iterator<Item=&GapBuffer> {
         let mut node_iter = self
             .tree
             .first_path()
@@ -379,6 +164,10 @@ impl Rope {
         // dbg!(&self.tree);
         self.tree.check()
     }
+
+    pub fn diagnose(&self) {
+        self.tree.diagnose_balance();
+    }
 }
 
 impl Default for Rope {
@@ -393,9 +182,7 @@ impl ToString for Rope {
         for elem in self.iter() {
             let (left, right) = elem.as_bytes();
             ans.extend_from_slice(left);
-            for &byte in right.iter().rev() {
-                ans.push(byte);
-            }
+            ans.extend_from_slice(right);
         }
 
         String::from_utf8(ans).unwrap()
@@ -403,7 +190,7 @@ impl ToString for Rope {
 }
 
 impl BTreeTrait for RopeTrait {
-    type Elem = RopeElem;
+    type Elem = GapBuffer;
     type Cache = usize;
 
     const MAX_LEN: usize = 32;
@@ -469,60 +256,6 @@ mod test {
     use crate::HeapVec;
 
     use super::*;
-
-    mod test_elem {
-        use super::*;
-
-        #[test]
-        fn insert() {
-            let mut e = RopeElem::new();
-            e.insert(0, "abc".as_bytes());
-            e.insert(2, "kkk".as_bytes());
-            assert_eq!(e.to_string(), "abkkkc".to_string());
-
-            let mut e = RopeElem::new();
-            e.insert(0, "abc".as_bytes());
-            e.insert(3, "kkk".as_bytes());
-            assert_eq!(e.to_string(), "abckkk".to_string());
-        }
-
-        #[test]
-        fn drain() {
-            let mut e = RopeElem::new();
-            e.insert(0, "0123456".as_bytes());
-            e.drain(2..4);
-            assert_eq!(e.to_string(), "01456".to_string());
-        }
-
-        #[test]
-        fn delete() {
-            let mut e = RopeElem::new();
-            e.insert(0, "0123456".as_bytes());
-            e.delete(2..4);
-            assert_eq!(e.to_string(), "01456".to_string());
-        }
-
-        #[test]
-        fn append() {
-            let mut a = RopeElem::from_str("123");
-            let mut b = RopeElem::from_str("456");
-            a.append(&b);
-            assert_eq!(a.to_string(), "123456".to_string());
-            b.prepend(&a);
-            assert_eq!(b.to_string(), "123456456".to_string());
-        }
-
-        #[test]
-        fn set() {
-            let mut a = RopeElem::from_str("0123");
-            a.insert(1, "kk".as_bytes());
-            assert_eq!(a.get(0), b'0');
-            assert_eq!(a.get(1), b'k');
-            assert_eq!(a.get(3), b'1');
-            a.set(1, b'9');
-            assert_eq!(a.get(1), b'9');
-        }
-    }
 
     #[test]
     fn test() {
@@ -612,6 +345,7 @@ mod test {
                     truth.insert_str(pos, &s);
                     rope.insert(pos, &s);
                     rope.check();
+                    assert_eq!(rope.len(), truth.len());
                 }
                 Action::Delete { pos, len } => {
                     let pos = pos as usize % (truth.len() + 1);
@@ -620,6 +354,7 @@ mod test {
                     rope.delete_range(pos..(pos + len));
                     truth.drain(pos..pos + len);
                     rope.check();
+                    assert_eq!(rope.len(), truth.len());
                 }
             }
         }

@@ -1,19 +1,18 @@
 use std::env;
+use std::io::Read;
 
 use arbitrary::{Arbitrary, Unstructured};
-use generic_btree::{HeapVec, Rope};
+use flate2::read::GzDecoder;
 use rand::{Rng, SeedableRng};
+use serde_json::Value;
+
+use generic_btree::{HeapVec, Rope};
 
 #[derive(Arbitrary, Debug, Clone, Copy)]
 enum RandomAction {
     Insert { pos: u8, content: u8 },
     Delete { pos: u8, len: u8 },
 }
-
-use std::io::Read;
-
-use flate2::read::GzDecoder;
-use serde_json::Value;
 
 #[derive(Arbitrary)]
 pub struct TextAction {
@@ -88,7 +87,7 @@ pub fn main() {
 
 #[inline(never)]
 fn bench(actions: Vec<TextAction>) {
-    for _ in 0..1000 {
+    for _ in 0..1 {
         let mut rope = Rope::new();
         for action in actions.iter() {
             if action.del > 0 {
@@ -98,5 +97,6 @@ fn bench(actions: Vec<TextAction>) {
                 rope.insert(action.pos, &action.ins)
             }
         }
+        rope.diagnose();
     }
 }
