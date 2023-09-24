@@ -87,7 +87,7 @@ pub fn main() {
 
 #[inline(never)]
 fn bench(actions: Vec<TextAction>) {
-    for _ in 0..1 {
+    for _ in 0..100 {
         let mut rope = Rope::new();
         for action in actions.iter() {
             if action.del > 0 {
@@ -97,6 +97,6 @@ fn bench(actions: Vec<TextAction>) {
                 rope.insert(action.pos, &action.ins)
             }
         }
-        rope.diagnose();
+        // rope.diagnose();
     }
 }

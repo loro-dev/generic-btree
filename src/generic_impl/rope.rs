@@ -10,7 +10,7 @@ use crate::rle::{HasLength, Mergeable, Sliceable};
 use super::gap_buffer::GapBuffer;
 use super::len_finder::UseLengthFinder;
 
-const MAX_LEN: usize = 100;
+const MAX_LEN: usize = 512;
 
 #[derive(Debug)]
 struct RopeTrait;
@@ -74,7 +74,7 @@ impl Rope {
             is_full = parent.is_full();
         }
 
-        tree.recursive_update_cache(leaf_index.into(), true, None);
+        tree.recursive_update_cache(leaf_index.into(), true, Some(elem.len() as isize));
         if is_full {
             tree.split(parent_idx);
         }
@@ -98,6 +98,24 @@ impl Rope {
         }
 
         let from = self.tree.query::<LengthFinder>(&start);
+        if end - start == 1 {
+            let Some(from) = from else { return; };
+            let leaf = self.tree.leaf_nodes.get_mut(from.leaf.0).unwrap();
+            if leaf.elem.len() == 1 {
+                // delete the whole leaf
+                self.tree.remove_leaf(from);
+            } else {
+                leaf.elem.delete(from.offset..from.offset + 1);
+                self.tree.recursive_update_cache(
+                    from.leaf.into(),
+                    true,
+                    Some(start as isize - end as isize),
+                );
+            }
+
+            return;
+        }
+
         let to = self.tree.query::<LengthFinder>(&end);
         match (from, to) {
             (Some(from), Some(to)) if from.leaf == to.leaf => {
