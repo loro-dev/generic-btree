@@ -4,24 +4,15 @@ use alloc::string::{String, ToString};
 use core::ops::RangeBounds;
 use std::assert_eq;
 
-use crate::{BTree, BTreeTrait, LengthFinder, QueryResult};
-use crate::rle::{HasLength, Mergeable, Sliceable};
+use crate::{ArenaIndex, BTree, BTreeTrait, LengthFinder, QueryResult};
 
 use super::gap_buffer::GapBuffer;
 use super::len_finder::UseLengthFinder;
 
-const MAX_LEN: usize = 512;
+const MAX_LEN: usize = 256;
 
 #[derive(Debug)]
 struct RopeTrait;
-
-fn closest_2_power(x: usize) -> usize {
-    let mut result = 8;
-    while result < x {
-        result <<= 1;
-    }
-    result
-}
 
 #[derive(Debug)]
 pub struct Rope {
@@ -59,7 +50,7 @@ impl Rope {
         let tree = &mut self.tree;
         let leaf_index = pos.leaf;
         let leaf = tree.leaf_nodes.get_mut(leaf_index.0).unwrap();
-        let parent_idx = leaf.parent();
+        let mut parent_idx = leaf.parent();
 
         let mut is_full = false;
         // Try to merge
@@ -67,10 +58,12 @@ impl Rope {
             leaf.elem.insert_bytes(pos.offset, elem.as_bytes());
         } else {
             let data = GapBuffer::from_str(elem);
-            let child = tree.alloc_leaf_child(data, parent_idx.unwrap());
-            let (_, parent, _, insert_index) = tree.split_leaf_if_needed(pos);
+            let (_, parent_index, insert_index) = tree.split_leaf_if_needed(pos);
+            parent_idx = ArenaIndex::Internal(parent_index);
             // Insert new leaf node
-            parent.children.insert(insert_index, child);
+            let child = tree.alloc_leaf_child(data, parent_index);
+            let parent = tree.in_nodes.get_mut(parent_index).unwrap();
+            parent.children.insert(insert_index, child).unwrap();
             is_full = parent.is_full();
         }
 
@@ -99,7 +92,9 @@ impl Rope {
 
         let from = self.tree.query::<LengthFinder>(&start);
         if end - start == 1 {
-            let Some(from) = from else { return; };
+            let Some(from) = from else {
+                return;
+            };
             let leaf = self.tree.leaf_nodes.get_mut(from.leaf.0).unwrap();
             if leaf.elem.len() == 1 {
                 // delete the whole leaf
@@ -138,7 +133,7 @@ impl Rope {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item=&GapBuffer> {
+    fn iter(&self) -> impl Iterator<Item = &GapBuffer> {
         let mut node_iter = self
             .tree
             .first_path()
@@ -155,7 +150,7 @@ impl Rope {
         })
     }
 
-    pub fn slice(&mut self, range: impl RangeBounds<usize>) {
+    pub fn slice(&mut self, _range: impl RangeBounds<usize>) {
         unimplemented!()
     }
 
@@ -210,8 +205,6 @@ impl ToString for Rope {
 impl BTreeTrait for RopeTrait {
     type Elem = GapBuffer;
     type Cache = usize;
-
-    const MAX_LEN: usize = 32;
 
     fn calc_cache_internal(
         cache: &mut Self::Cache,
@@ -331,6 +324,15 @@ mod test {
         assert_eq!(&rope.to_string(), "");
         rope.insert(0, "kkk");
         assert_eq!(&rope.to_string(), "kkk");
+    }
+
+    #[test]
+    fn test_repeat_insert() {
+        let mut rope = Rope::new();
+        rope.insert(0, "123");
+        for _ in 0..10000 {
+            rope.insert(rope.len() / 2, "k");
+        }
     }
 
     #[test]

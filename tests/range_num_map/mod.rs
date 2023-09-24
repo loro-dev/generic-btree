@@ -174,8 +174,6 @@ impl BTreeTrait for RangeNumMapTrait {
 
     type CacheDiff = isize;
 
-    const MAX_LEN: usize = 8;
-
     fn calc_cache_internal(
         cache: &mut Self::Cache,
         caches: &[generic_btree::Child<Self>],

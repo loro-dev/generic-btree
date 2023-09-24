@@ -17,6 +17,7 @@ documentation = "https://docs.rs/generic-btree"
 
 [dependencies]
 fxhash = "0.2.1"
+heapless = "0.7.16"
 proc-macro2 = "1.0.67"
 smallvec = { version = "1.10.0", features = [] }
 thunderdome = { version = "0.6.0", features = [] }

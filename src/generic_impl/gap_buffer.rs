@@ -44,8 +44,7 @@ impl GapBuffer {
             std::cmp::Ordering::Greater => {
                 let gap_move = index - gap_start;
                 let move_end = self.buffer.len().min(gap_end + gap_move);
-                self.buffer
-                    .copy_within(gap_end..move_end, gap_start);
+                self.buffer.copy_within(gap_end..move_end, gap_start);
                 self.gap_start += gap_move as u16;
             }
         }
@@ -182,8 +181,8 @@ impl Sliceable for GapBuffer {
     }
 
     fn slice_(&mut self, range: impl RangeBounds<usize>)
-        where
-            Self: Sized,
+    where
+        Self: Sized,
     {
         let start = match range.start_bound() {
             std::ops::Bound::Included(x) => *x,

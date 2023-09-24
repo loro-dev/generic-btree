@@ -1,5 +1,4 @@
 use crate::LeafIndex;
-use thunderdome::Index as ArenaIndex;
 
 /// The move event of an element.
 ///

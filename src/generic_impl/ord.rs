@@ -67,8 +67,9 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
             } else {
                 // Insert new leaf node
                 let child = tree.alloc_leaf_child(data, parent.unwrap_internal());
-                let (_, parent, _, insert_index) = tree.split_leaf_if_needed(result);
-                parent.children.insert(insert_index, child);
+                let (_, parent_index, insert_index) = tree.split_leaf_if_needed(result);
+                let parent = tree.in_nodes.get_mut(parent_index).unwrap();
+                parent.children.insert(insert_index, child).unwrap();
                 is_full = parent.is_full();
             }
 
@@ -234,8 +235,6 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
     type Elem = Unmergeable<(Key, Value)>;
     type Cache = Option<(Key, Key)>;
 
-    const MAX_LEN: usize = 32;
-
     #[inline(always)]
     fn calc_cache_internal(
         cache: &mut Self::Cache,
@@ -345,6 +344,7 @@ mod test {
         for i in 0..100 {
             tree.insert(i);
         }
+
         for i in 0..99 {
             let a = tree.0.tree.query::<OrdTrait<u64, ()>>(&i).unwrap();
             assert_eq!(tree.0.tree.compare_pos(a, a), Ordering::Equal);

@@ -1,4 +1,6 @@
-use crate::{ArenaIndex, BTree, BTreeTrait, LeafNode, NodePath, QueryResult};
+use crate::{
+    delete_range, ArenaIndex, BTree, BTreeTrait, HeapVec, LeafNode, NodePath, QueryResult,
+};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
@@ -161,9 +163,11 @@ impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
             if start_arena == end_arena {
                 // parent is the same, delete start..end
                 let parent = self.tree.get_internal_mut(start_arena);
-                for x in parent.children.drain(del_start..del_end) {
+                for x in &parent.children[del_start..del_end] {
                     deleted.push(x.arena);
                 }
+
+                delete_range(&mut parent.children, del_start..del_end);
                 self.tree
                     .update_children_parent_slot_from(start_arena, del_start);
             } else {
@@ -171,16 +175,18 @@ impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
                 {
                     // delete start..
                     let start_parent = self.tree.get_internal_mut(start_arena);
-                    for x in start_parent.children.drain(del_start..) {
+                    for x in &start_parent.children[del_start..] {
                         deleted.push(x.arena);
                     }
+                    delete_range(&mut start_parent.children, del_start..);
                 }
                 {
                     // delete ..end
                     let end_parent = self.tree.get_internal_mut(end_arena);
-                    for x in end_parent.children.drain(..del_end) {
+                    for x in &end_parent.children[..del_end] {
                         deleted.push(x.arena);
                     }
+                    delete_range(&mut end_parent.children, ..del_end);
                     self.tree.update_children_parent_slot_from(end_arena, 0);
                 }
             }
