@@ -133,7 +133,7 @@ impl Rope {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = &GapBuffer> {
+    fn iter(&self) -> impl Iterator<Item=&GapBuffer> {
         let mut node_iter = self
             .tree
             .first_path()
@@ -205,29 +205,22 @@ impl ToString for Rope {
 impl BTreeTrait for RopeTrait {
     type Elem = GapBuffer;
     type Cache = isize;
-
-    #[inline(always)]
-    fn calc_cache_internal(
-        cache: &mut Self::Cache,
-        caches: &[crate::Child<Self>],
-        diff: Option<isize>,
-    ) -> Option<isize> {
-        match diff {
-            Some(diff) => {
-                *cache += diff;
-                Some(diff)
-            }
-            None => {
-                let new_cache = caches.iter().map(|x| x.cache).sum::<isize>();
-                let diff = new_cache - *cache;
-                *cache = new_cache;
-                Some(diff)
-            }
-        }
-    }
-
     type CacheDiff = isize;
 
+    #[inline(always)]
+    fn calc_cache_internal(cache: &mut Self::Cache, caches: &[crate::Child<Self>]) -> isize {
+        let new_cache = caches.iter().map(|x| x.cache).sum::<isize>();
+        let diff = new_cache - *cache;
+        *cache = new_cache;
+        diff
+    }
+
+    #[inline(always)]
+    fn apply_cache_diff(cache: &mut Self::Cache, diff: &Self::CacheDiff) {
+        *cache += *diff;
+    }
+
+    #[inline(always)]
     fn merge_cache_diff(diff1: &mut Self::CacheDiff, diff2: &Self::CacheDiff) {
         *diff1 += diff2;
     }
@@ -235,6 +228,11 @@ impl BTreeTrait for RopeTrait {
     #[inline(always)]
     fn get_elem_cache(elem: &Self::Elem) -> Self::Cache {
         elem.len() as isize
+    }
+
+    #[inline(always)]
+    fn new_cache_to_diff(cache: &Self::Cache) -> Self::CacheDiff {
+        *cache
     }
 }
 

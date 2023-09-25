@@ -1,8 +1,8 @@
 use std::{ops::Range, usize};
 
 use generic_btree::{
-    rle::{HasLength, Mergeable, Sliceable},
-    BTree, BTreeTrait, LengthFinder, UseLengthFinder,
+    BTree,
+    BTreeTrait, LengthFinder, rle::{HasLength, Mergeable, Sliceable}, UseLengthFinder,
 };
 
 /// This struct keep the mapping of ranges to numbers
@@ -50,7 +50,7 @@ impl RangeNumMap {
         self.0.get_elem(result.leaf).and_then(|x| x.value)
     }
 
-    pub fn iter(&mut self) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
+    pub fn iter(&mut self) -> impl Iterator<Item=(Range<usize>, isize)> + '_ {
         let mut index = 0;
         self.0.iter().filter_map(move |elem| {
             let len = elem.len;
@@ -86,7 +86,7 @@ impl RangeNumMap {
     pub fn drain(
         &mut self,
         range: Range<usize>,
-    ) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
+    ) -> impl Iterator<Item=(Range<usize>, isize)> + '_ {
         let mut index = range.start;
         let self1 = &self.0;
         let from = self1.query::<LengthFinder>(&range.start);
@@ -149,8 +149,8 @@ impl Sliceable for Elem {
     }
 
     fn slice_(&mut self, range: impl std::ops::RangeBounds<usize>)
-    where
-        Self: Sized,
+        where
+            Self: Sized,
     {
         let len = match range.end_bound() {
             std::ops::Bound::Included(x) => x + 1,
@@ -174,30 +174,34 @@ impl BTreeTrait for RangeNumMapTrait {
 
     type CacheDiff = isize;
 
+    #[inline(always)]
     fn calc_cache_internal(
         cache: &mut Self::Cache,
         caches: &[generic_btree::Child<Self>],
-        diff: Option<isize>,
-    ) -> Option<isize> {
-        match diff {
-            Some(diff) => {
-                *cache = (*cache as isize + diff) as usize;
-                Some(diff)
-            }
-            None => {
-                let new_cache = caches.iter().map(|c| c.cache).sum();
-                let diff = new_cache as isize - *cache as isize;
-                *cache = new_cache;
-                Some(diff)
-            }
-        }
+    ) -> isize {
+        let new_cache = caches.iter().map(|c| c.cache).sum();
+        let diff = new_cache as isize - *cache as isize;
+        *cache = new_cache;
+        diff
     }
 
+    #[inline(always)]
     fn merge_cache_diff(diff1: &mut Self::CacheDiff, diff2: &Self::CacheDiff) {
         *diff1 += diff2;
     }
 
+    #[inline(always)]
     fn get_elem_cache(elem: &Self::Elem) -> Self::Cache {
         elem.len
+    }
+
+    #[inline(always)]
+    fn apply_cache_diff(cache: &mut Self::Cache, diff: &Self::CacheDiff) {
+        *cache = (*cache as isize + diff) as usize;
+    }
+
+    #[inline(always)]
+    fn new_cache_to_diff(cache: &Self::Cache) -> Self::CacheDiff {
+        *cache as isize
     }
 }
