@@ -13,9 +13,9 @@ pub(super) struct GapBuffer {
 impl GapBuffer {
     pub fn new() -> Self {
         Self {
-            buffer: vec![0; 32],
+            buffer: vec![0; 64],
             gap_start: 0,
-            gap_len: 32,
+            gap_len: 64,
         }
     }
 

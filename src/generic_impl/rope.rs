@@ -4,7 +4,8 @@ use alloc::string::{String, ToString};
 use core::ops::RangeBounds;
 use std::assert_eq;
 
-use crate::{ArenaIndex, BTree, BTreeTrait, LengthFinder, QueryResult};
+use crate::rle::Sliceable;
+use crate::{BTree, BTreeTrait, LengthFinder, QueryResult};
 
 use super::gap_buffer::GapBuffer;
 use super::len_finder::UseLengthFinder;
@@ -42,38 +43,35 @@ impl Rope {
             panic!("index {} out of range len={}", index, self.len());
         }
 
-        let Some(pos) = self.tree.query::<LengthFinder>(&index) else {
+        if self.is_empty() {
             self.tree.push(GapBuffer::from_str(elem));
             return;
-        };
-
-        let tree = &mut self.tree;
-        let leaf_index = pos.leaf;
-        let leaf = tree.leaf_nodes.get_mut(leaf_index.0).unwrap();
-        let mut parent_idx = leaf.parent();
-
-        let mut is_full = false;
-        // Try to merge
-        if leaf.elem.len() + elem.len() < MAX_LEN {
-            leaf.elem.insert_bytes(pos.offset, elem.as_bytes());
-        } else {
-            let data = GapBuffer::from_str(elem);
-            let (_, parent_index, insert_index) = tree.split_leaf_if_needed(pos);
-            parent_idx = ArenaIndex::Internal(parent_index);
-            // Insert new leaf node
-            let child = tree.alloc_leaf_child(data, parent_index);
-            let parent = tree.in_nodes.get_mut(parent_index).unwrap();
-            parent.children.insert(insert_index, child).unwrap();
-            is_full = parent.is_full();
         }
 
-        tree.recursive_update_cache(leaf_index.into(), true, Some(elem.len() as isize));
-        if is_full {
-            tree.split(parent_idx);
-        }
+        self.tree
+            .update_leaf_by_search::<LengthFinder>(&index, |leaf, pos| {
+                if leaf.len() + elem.len() < MAX_LEN.max(leaf.capacity()) {
+                    leaf.insert_bytes(pos.offset, elem.as_bytes());
+                    Some((elem.len() as isize, None, None))
+                } else {
+                    let mut right = leaf.slice(pos.offset..);
+                    leaf.slice_(..pos.offset);
+                    if leaf.len() + elem.len() < MAX_LEN {
+                        leaf.push_bytes(elem.as_bytes());
+                    } else {
+                        right.insert_bytes(0, elem.as_bytes());
+                    }
+
+                    Some((elem.len() as isize, Some(right), None))
+                }
+            });
     }
 
     pub fn delete_range(&mut self, range: impl RangeBounds<usize>) {
+        if self.is_empty() {
+            return;
+        }
+
         let start = match range.start_bound() {
             core::ops::Bound::Included(x) => *x,
             core::ops::Bound::Excluded(x) => *x + 1,
@@ -90,27 +88,16 @@ impl Rope {
             return;
         }
 
-        let from = self.tree.query::<LengthFinder>(&start);
         if end - start == 1 {
-            let Some(from) = from else {
-                return;
-            };
-            let leaf = self.tree.leaf_nodes.get_mut(from.leaf.0).unwrap();
-            if leaf.elem.len() == 1 {
-                // delete the whole leaf
-                self.tree.remove_leaf(from);
-            } else {
-                leaf.elem.delete(from.offset..from.offset + 1);
-                self.tree.recursive_update_cache(
-                    from.leaf.into(),
-                    true,
-                    Some(start as isize - end as isize),
-                );
-            }
-
+            self.tree
+                .update_leaf_by_search::<LengthFinder>(&start, |leaf, pos| {
+                    leaf.delete(pos.offset..pos.offset + 1);
+                    Some((-1, None, None))
+                });
             return;
         }
 
+        let from = self.tree.query::<LengthFinder>(&start);
         let to = self.tree.query::<LengthFinder>(&end);
         match (from, to) {
             (Some(from), Some(to)) if from.leaf == to.leaf => {
@@ -133,7 +120,7 @@ impl Rope {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item=&GapBuffer> {
+    fn iter(&self) -> impl Iterator<Item = &GapBuffer> {
         let mut node_iter = self
             .tree
             .first_path()
@@ -368,6 +355,7 @@ mod test {
                     rope.insert(pos, &s);
                     rope.check();
                     assert_eq!(rope.len(), truth.len());
+                    assert_eq!(rope.to_string(), truth, "{:#?}", &rope.tree);
                 }
                 Action::Delete { pos, len } => {
                     let pos = pos as usize % (truth.len() + 1);

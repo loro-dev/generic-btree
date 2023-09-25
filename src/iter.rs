@@ -118,7 +118,6 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
 impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
     fn drop(&mut self) {
         self.ensure_finished();
-        // TODO: refactor, extract the following 4 fields to a single struct
         let TempStore {
             start_path,
             end_path,

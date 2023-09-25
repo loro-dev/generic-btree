@@ -2,8 +2,8 @@ use core::fmt::Debug;
 use std::cmp::Ordering;
 use std::ops::RangeBounds;
 
-use crate::{BTree, BTreeTrait, FindResult, MoveEvent, MoveListener, Query};
 use crate::rle::{HasLength, Mergeable, Sliceable};
+use crate::{BTree, BTreeTrait, FindResult, MoveEvent, MoveListener, Query};
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -80,7 +80,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
             }
         } else {
             let leaf = self.tree.get_elem_mut(result.leaf).unwrap();
-            leaf.0.1 = value;
+            leaf.0 .1 = value;
         }
     }
 
@@ -103,13 +103,13 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
     }
 
     #[inline(always)]
-    pub fn iter(&self) -> impl Iterator<Item=&(Key, Value)> {
+    pub fn iter(&self) -> impl Iterator<Item = &(Key, Value)> {
         self.tree.iter().map(|x| &x.0)
     }
 
     #[inline(always)]
-    pub fn iter_key(&self) -> impl Iterator<Item=&Key> {
-        self.tree.iter().map(|x| &x.0.0)
+    pub fn iter_key(&self) -> impl Iterator<Item = &Key> {
+        self.tree.iter().map(|x| &x.0 .0)
     }
 
     #[inline(always)]
@@ -145,7 +145,7 @@ impl<Key: Clone + Ord + Debug + 'static> OrdTreeSet<Key> {
     }
 
     #[inline(always)]
-    pub fn iter(&self) -> impl Iterator<Item=&Key> {
+    pub fn iter(&self) -> impl Iterator<Item = &Key> {
         self.0.iter_key()
     }
 
@@ -171,7 +171,7 @@ impl<Key: Clone + Ord + Debug + 'static> Default for OrdTreeSet<Key> {
 }
 
 impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> Default
-for OrdTreeMap<Key, Value>
+    for OrdTreeMap<Key, Value>
 {
     #[inline(always)]
     fn default() -> Self {
@@ -261,15 +261,15 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
 
     #[inline(always)]
     fn get_elem_cache(elem: &Self::Elem) -> Self::Cache {
-        Some((elem.0.0.clone(), elem.0.0.clone()))
+        Some((elem.0 .0.clone(), elem.0 .0.clone()))
     }
 
     #[inline(always)]
-    fn new_cache_to_diff(cache: &Self::Cache) -> Self::CacheDiff {}
+    fn new_cache_to_diff(_: &Self::Cache) -> Self::CacheDiff {}
 }
 
 impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug + 'static> Query<OrdTrait<Key, Value>>
-for OrdTrait<Key, Value>
+    for OrdTrait<Key, Value>
 {
     type QueryArg = Key;
 
@@ -308,7 +308,7 @@ for OrdTrait<Key, Value>
         q: &Self::QueryArg,
         elem: &<OrdTrait<Key, Value> as BTreeTrait>::Elem,
     ) -> (usize, bool) {
-        match q.cmp(&elem.0.0) {
+        match q.cmp(&elem.0 .0) {
             Ordering::Less => (0, false),
             Ordering::Equal => (0, true),
             Ordering::Greater => (1, false),
@@ -385,10 +385,10 @@ mod test {
             tree.set_listener(Some(Box::new(move |event| {
                 if let Some(leaf) = event.target_leaf {
                     let mut record = record.lock().unwrap();
-                    record.insert(event.elem.0.0, leaf);
+                    record.insert(event.elem.0 .0, leaf);
                 } else {
                     let mut record = record.lock().unwrap();
-                    record.remove(&event.elem.0.0);
+                    record.remove(&event.elem.0 .0);
                 }
             })));
             for &value in data.iter() {
@@ -400,7 +400,7 @@ mod test {
                 for &value in data.iter() {
                     let index = record.get(&value).unwrap();
                     let node = tree.tree.get_elem(*index).unwrap();
-                    assert_eq!(node.0.0, value);
+                    assert_eq!(node.0 .0, value);
                 }
             }
             for value in data.drain(0..100) {
@@ -413,7 +413,7 @@ mod test {
                 for &value in data.iter() {
                     let index = record.get(&value).unwrap();
                     let node = tree.tree.get_elem(*index).unwrap();
-                    assert_eq!(node.0.0, value);
+                    assert_eq!(node.0 .0, value);
                 }
             }
             for value in data.drain(0..800) {
@@ -426,7 +426,7 @@ mod test {
                 for &value in data.iter() {
                     let index = record.get(&value).unwrap();
                     let node = tree.tree.get_elem(*index).unwrap();
-                    assert_eq!(node.0.0, value);
+                    assert_eq!(node.0 .0, value);
                 }
             }
             tree.tree.check();
@@ -439,7 +439,7 @@ mod test {
                     for &value in data.iter() {
                         let index = record.get(&value).unwrap();
                         let node = tree.tree.get_elem(*index).unwrap();
-                        assert_eq!(node.0.0, value);
+                        assert_eq!(node.0 .0, value);
                     }
                 }
             }
