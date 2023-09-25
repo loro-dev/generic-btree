@@ -137,7 +137,7 @@ impl Rope {
                     let end_offset = end - pos;
                     let valid = self.tree.update_leaf(leaf, |leaf| {
                         leaf.delete(start_offset..end_offset);
-                        (true, Some(-1), None, None)
+                        (true, Some(start as isize - end as isize), None, None)
                     });
 
                     if !valid {
