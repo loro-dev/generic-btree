@@ -912,8 +912,10 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// `f` returns Option<(cache_diff, new_insert_1, new_insert2)>
     ///
-    /// If returned value is `None`, the cache will not be updated.
-    /// If leaf_node.rle_len() == 0, it will be removed from the tree.
+    /// - If returned value is `None`, the cache will not be updated.
+    /// - If leaf_node.rle_len() == 0, it will be removed from the tree.
+    ///
+    /// Returns the path, if is is still valid after this method. (If the leaf node is removed, the path will be None)
     pub fn update_leaf_by_search<Q: Query<B>>(
         &mut self,
         q: &Q::QueryArg,
@@ -921,7 +923,7 @@ impl<B: BTreeTrait> BTree<B> {
             &mut B::Elem,
             QueryResult,
         ) -> Option<(B::CacheDiff, Option<B::Elem>, Option<B::Elem>)>,
-    ) {
+    ) -> Option<QueryResult> {
         if self.is_empty() {
             panic!("update_leaf_by_search called on empty tree");
         }
@@ -945,15 +947,13 @@ impl<B: BTreeTrait> BTree<B> {
 
         let leaf = self.get_leaf_mut(node_idx);
         let (offset, found) = finder.confirm_elem(q, &leaf.elem);
-        let Some((diff, new_insert_1, new_insert_2)) = f(
-            &mut leaf.elem,
-            QueryResult {
-                leaf: node_idx.unwrap_leaf().into(),
-                offset,
-                found,
-            },
-        ) else {
-            return;
+        let ans = QueryResult {
+            leaf: node_idx.unwrap_leaf().into(),
+            offset,
+            found,
+        };
+        let Some((diff, new_insert_1, new_insert_2)) = f(&mut leaf.elem, ans) else {
+            return Some(ans);
         };
 
         if new_insert_2.is_some() {
@@ -961,6 +961,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         if leaf.elem.rle_len() == 0 {
+            // handle deletion
             // leaf node should be deleted
             assert!(new_insert_1.is_none());
             assert!(new_insert_2.is_none());
@@ -1003,7 +1004,7 @@ impl<B: BTreeTrait> BTree<B> {
                 }
             }
 
-            return;
+            return None;
         }
 
         let mut new_cache_and_child = None;
@@ -1046,46 +1047,64 @@ impl<B: BTreeTrait> BTree<B> {
         } else {
             B::apply_cache_diff(&mut self.root_cache, &diff);
         }
+
+        Some(ans)
     }
 
-    /// update leaf node's elements, return true if cache need to be updated
+    /// Update leaf node's elements, return true if cache need to be updated
     ///
     /// `f` returns (is_cache_updated, cache_diff, new_insert_1, new_insert2)
+    ///
+    /// - If leaf_node.rle_len() == 0, it will be removed from the tree.
+    ///
+    /// Returns true if the node_idx is still valid. (If the leaf node is removed, it will return false).
     pub fn update_leaf(
         &mut self,
         node_idx: LeafIndex,
         f: impl FnOnce(&mut B::Elem) -> (bool, Option<B::CacheDiff>, Option<B::Elem>, Option<B::Elem>),
-    ) {
+    ) -> bool {
         let node = self.leaf_nodes.get_mut(node_idx.0).unwrap();
         let parent_idx = node.parent();
         let (need_update_cache, diff, new_insert_1, new_insert_2) = f(&mut node.elem);
+        let deleted = node.elem.rle_len() == 0;
 
         if need_update_cache {
             self.recursive_update_cache(node_idx.into(), B::USE_DIFF, diff);
         }
 
         if new_insert_1.is_none() {
-            return;
+            return true;
         }
 
-        let new: HeaplessVec<_, 2> = new_insert_1
-            .into_iter()
-            .chain(new_insert_2)
-            .map(|elem| self.alloc_leaf_child(elem, parent_idx.unwrap()))
-            .collect();
+        if deleted {
+            assert!(new_insert_1.is_none());
+            assert!(new_insert_2.is_none());
+            let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
+            let slot = Self::get_leaf_slot(node_idx.0, parent);
+            parent.children.remove(slot);
+            let is_lack = parent.is_lack();
+            if is_lack {
+                self.handle_lack(parent_idx);
+            }
 
-        let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
-        let slot = Self::get_leaf_slot(node_idx.0, parent);
-        for (i, v) in new.into_iter().enumerate() {
-            parent.children.insert(slot + 1 + i, v).unwrap();
-        }
-        let is_full = parent.is_full();
-        let is_lack = parent.is_lack();
-        if is_full {
-            self.split(parent_idx);
-        }
-        if is_lack {
-            self.handle_lack(parent_idx);
+            false
+        } else {
+            let new: HeaplessVec<_, 2> = new_insert_1
+                .into_iter()
+                .chain(new_insert_2)
+                .map(|elem| self.alloc_leaf_child(elem, parent_idx.unwrap()))
+                .collect();
+            let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
+            let slot = Self::get_leaf_slot(node_idx.0, parent);
+            for (i, v) in new.into_iter().enumerate() {
+                parent.children.insert(slot + 1 + i, v).unwrap();
+            }
+            let is_full = parent.is_full();
+            if is_full {
+                self.split(parent_idx);
+            }
+
+            true
         }
     }
 

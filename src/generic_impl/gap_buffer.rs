@@ -200,6 +200,18 @@ impl Sliceable for GapBuffer {
         self.delete(..start);
         debug_assert_eq!(self.len(), end - start);
     }
+
+    fn split(&mut self, pos: usize) -> Self
+    where
+        Self: Sized,
+    {
+        self.shift_at(pos);
+        let right = self.as_bytes().1;
+        let mut r = Self::with_capacity(right.len().max(64));
+        r.push_bytes(right);
+        self.gap_len = (self.capacity() - pos) as u16;
+        r
+    }
 }
 
 impl Mergeable for GapBuffer {

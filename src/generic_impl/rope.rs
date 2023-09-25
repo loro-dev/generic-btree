@@ -5,7 +5,7 @@ use core::ops::RangeBounds;
 use std::assert_eq;
 
 use crate::rle::Sliceable;
-use crate::{BTree, BTreeTrait, LengthFinder, QueryResult};
+use crate::{BTree, BTreeTrait, LeafIndex, LengthFinder, QueryResult};
 
 use super::gap_buffer::GapBuffer;
 use super::len_finder::UseLengthFinder;
@@ -16,8 +16,15 @@ const MAX_LEN: usize = 256;
 struct RopeTrait;
 
 #[derive(Debug)]
+struct Cursor {
+    pos: usize,
+    leaf: LeafIndex,
+}
+
+#[derive(Debug)]
 pub struct Rope {
     tree: BTree<RopeTrait>,
+    cursor: Option<Cursor>,
 }
 
 impl UseLengthFinder<RopeTrait> for RopeTrait {
@@ -28,14 +35,14 @@ impl UseLengthFinder<RopeTrait> for RopeTrait {
 }
 
 impl Rope {
-    #[inline]
+    #[inline(always)]
     pub fn len(&self) -> usize {
         self.tree.root_cache as usize
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.tree.root_cache == 0
     }
 
     pub fn insert(&mut self, index: usize, elem: &str) {
@@ -48,14 +55,44 @@ impl Rope {
             return;
         }
 
-        self.tree
+        if let Some(Cursor { pos, leaf }) = self.cursor {
+            if pos <= index {
+                let node = self.tree.leaf_nodes.get(leaf.0).unwrap();
+                if index <= pos + node.elem.len() {
+                    let offset = index - pos;
+                    let valid = self.tree.update_leaf(leaf, |leaf| {
+                        if leaf.len() + elem.len() < MAX_LEN.max(leaf.capacity()) {
+                            leaf.insert_bytes(offset, elem.as_bytes());
+                            (true, Some(elem.len() as isize), None, None)
+                        } else {
+                            let mut right = leaf.split(offset);
+                            if leaf.len() + elem.len() < MAX_LEN {
+                                leaf.push_bytes(elem.as_bytes());
+                            } else {
+                                right.insert_bytes(0, elem.as_bytes());
+                            }
+
+                            (true, Some(elem.len() as isize), Some(right), None)
+                        }
+                    });
+
+                    if !valid {
+                        self.cursor = None;
+                    }
+
+                    return;
+                }
+            }
+        }
+
+        let q = self
+            .tree
             .update_leaf_by_search::<LengthFinder>(&index, |leaf, pos| {
                 if leaf.len() + elem.len() < MAX_LEN.max(leaf.capacity()) {
                     leaf.insert_bytes(pos.offset, elem.as_bytes());
                     Some((elem.len() as isize, None, None))
                 } else {
-                    let mut right = leaf.slice(pos.offset..);
-                    leaf.slice_(..pos.offset);
+                    let mut right = leaf.split(pos.offset);
                     if leaf.len() + elem.len() < MAX_LEN {
                         leaf.push_bytes(elem.as_bytes());
                     } else {
@@ -65,6 +102,10 @@ impl Rope {
                     Some((elem.len() as isize, Some(right), None))
                 }
             });
+        self.cursor = q.map(|q| Cursor {
+            pos: index - q.offset,
+            leaf: q.leaf,
+        });
     }
 
     pub fn delete_range(&mut self, range: impl RangeBounds<usize>) {
@@ -88,15 +129,43 @@ impl Rope {
             return;
         }
 
+        if let Some(Cursor { pos, leaf }) = self.cursor {
+            if pos <= start {
+                let node = self.tree.leaf_nodes.get(leaf.0).unwrap();
+                if end <= pos + node.elem.len() {
+                    let start_offset = start - pos;
+                    let end_offset = end - pos;
+                    let valid = self.tree.update_leaf(leaf, |leaf| {
+                        leaf.delete(start_offset..end_offset);
+                        (true, Some(-1), None, None)
+                    });
+
+                    if !valid {
+                        self.cursor = None;
+                    }
+
+                    return;
+                }
+            }
+        }
+
         if end - start == 1 {
-            self.tree
+            let q = self
+                .tree
                 .update_leaf_by_search::<LengthFinder>(&start, |leaf, pos| {
                     leaf.delete(pos.offset..pos.offset + 1);
                     Some((-1, None, None))
                 });
+            if let Some(q) = q {
+                self.cursor = Some(Cursor {
+                    pos: start - q.offset,
+                    leaf: q.leaf,
+                });
+            }
             return;
         }
 
+        self.cursor = None;
         let from = self.tree.query::<LengthFinder>(&start);
         let to = self.tree.query::<LengthFinder>(&end);
         match (from, to) {
@@ -142,7 +211,10 @@ impl Rope {
     }
 
     pub fn new() -> Self {
-        Self { tree: BTree::new() }
+        Self {
+            tree: BTree::new(),
+            cursor: None,
+        }
     }
 
     #[allow(unused)]

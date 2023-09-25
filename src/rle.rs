@@ -1,13 +1,23 @@
 use core::ops::RangeBounds;
-pub trait Sliceable<T = usize>: HasLength<T> {
+pub trait Sliceable<T: Copy = usize>: HasLength<T> {
     #[must_use]
     fn slice(&self, range: impl RangeBounds<T>) -> Self;
     /// slice in-place
     fn slice_(&mut self, range: impl RangeBounds<T>)
-        where
-            Self: Sized,
+    where
+        Self: Sized,
     {
         *self = self.slice(range);
+    }
+
+    #[must_use]
+    fn split(&mut self, pos: T) -> Self
+    where
+        Self: Sized,
+    {
+        let right = self.slice(pos..);
+        self.slice_(..pos);
+        right
     }
 }
 
@@ -23,4 +33,3 @@ pub trait Mergeable {
 pub trait HasLength<T = usize> {
     fn rle_len(&self) -> T;
 }
-
