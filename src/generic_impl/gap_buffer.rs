@@ -9,6 +9,7 @@ pub(super) struct GapBuffer {
     gap_len: u16,
 }
 
+#[allow(unused)]
 impl GapBuffer {
     pub fn new() -> Self {
         Self {

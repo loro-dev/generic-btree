@@ -1,10 +1,7 @@
 #![doc = include_str!("../README.md")]
 #![forbid(unsafe_code)]
 
-use core::{
-    fmt::Debug,
-    ops::{Deref, Range},
-};
+use core::{fmt::Debug, ops::Range};
 use std::{cmp::Ordering, mem::take, ops::RangeBounds};
 
 use fxhash::{FxHashMap, FxHashSet};
@@ -24,8 +21,6 @@ pub mod iter;
 
 pub mod rle;
 
-pub type SmallElemVec<T> = SmallVec<[T; 8]>;
-pub type StackVec<T> = SmallVec<[T; 8]>;
 pub type HeapVec<T> = Vec<T>;
 
 const MAX_CHILDREN_NUM: usize = 16;
@@ -128,51 +123,6 @@ impl Idx {
 
 type NodePath = SmallVec<[Idx; 4]>;
 
-struct PathRef<'a>(&'a [Idx]);
-
-impl<'a> Deref for PathRef<'a> {
-    type Target = [Idx];
-
-    fn deref(&self) -> &Self::Target {
-        self.0
-    }
-}
-
-impl<'a> From<&'a StackVec<Idx>> for PathRef<'a> {
-    fn from(value: &'a StackVec<Idx>) -> Self {
-        Self(value)
-    }
-}
-
-impl<'a> From<&'a [Idx]> for PathRef<'a> {
-    fn from(value: &'a [Idx]) -> Self {
-        Self(value)
-    }
-}
-
-impl<'a> PathRef<'a> {
-    pub fn parent(&self) -> Option<Idx> {
-        if self.len() >= 2 {
-            self.get(self.len() - 2).copied()
-        } else {
-            None
-        }
-    }
-
-    pub fn parent_path(&self) -> PathRef<'a> {
-        Self(&self.0[..self.len() - 1])
-    }
-
-    pub fn set_as_parent_path(&mut self) {
-        debug_assert!(self.len() > 1);
-        self.0 = &self.0[..self.len() - 1];
-    }
-
-    pub fn is_root(&self) -> bool {
-        self.len() == 1
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub struct QueryResult {
     pub leaf: LeafIndex,
@@ -190,7 +140,7 @@ pub struct QueryResult {
 pub struct LeafIndex(RawArenaIndex);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-enum ArenaIndex {
+pub enum ArenaIndex {
     Leaf(RawArenaIndex),
     Internal(RawArenaIndex),
 }
@@ -258,7 +208,7 @@ impl QueryResult {
 }
 
 #[derive(Debug, Clone)]
-struct LeafNode<Elem> {
+pub struct LeafNode<Elem> {
     elem: Elem,
     parent: RawArenaIndex,
 }
@@ -281,7 +231,7 @@ impl<T: Sliceable> LeafNode<T> {
 }
 
 // TODO: use enum to save spaces
-struct Node<B: BTreeTrait> {
+pub struct Node<B: BTreeTrait> {
     parent: Option<ArenaIndex>,
     parent_slot: u8,
     children: HeaplessVec<Child<B>, MAX_CHILDREN_NUM>,
@@ -299,18 +249,18 @@ impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug
             match node_idx {
                 ArenaIndex::Leaf(_) => {}
                 ArenaIndex::Internal(_) => {
-                    let node = tree.get_internal_node(node_idx);
+                    let node = tree.get_internal(node_idx);
                     for child in node.children.iter() {
                         indent(f, indent_size)?;
                         if child.is_internal() {
-                            let child_node = tree.get_internal_node(child.arena);
+                            let child_node = tree.get_internal(child.arena);
                             f.write_fmt(format_args!(
                                 "{} Arena({:?}) Cache: {:?}\n",
                                 child_node.parent_slot, &child.arena, &child.cache
                             ))?;
                             fmt_node::<Cache, Elem, B>(tree, child.arena, f, indent_size + 1)?;
                         } else {
-                            let node = tree.get_leaf_node(child.arena);
+                            let node = tree.get_leaf(child.arena);
                             f.write_fmt(format_args!(
                                 "Leaf() Arena({:?}) Parent({:?}) Cache: {:?}\n",
                                 child.arena, node.parent, &child.cache
@@ -380,6 +330,7 @@ impl<B: ?Sized + BTreeTrait> Child<B> {
     }
 
     #[inline]
+    #[allow(unused)]
     fn is_leaf(&self) -> bool {
         matches!(self.arena, ArenaIndex::Leaf(_))
     }
@@ -913,6 +864,7 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// When path.offset == leaf.rle_len(), this method will return
     /// the next leaf node with offset 0
+    #[allow(unused)]
     fn prefer_right(&self, path: QueryResult) -> Option<QueryResult> {
         if path.offset == 0 {
             return Some(path);
@@ -965,13 +917,13 @@ impl<B: BTreeTrait> BTree<B> {
             self.recursive_update_cache(node_idx.into(), true, diff);
         }
 
-        if !new_insert_1.is_some() {
+        if new_insert_1.is_none() {
             return;
         }
 
         let new: SmallVec<[_; 2]> = new_insert_1
             .into_iter()
-            .chain(new_insert_2.into_iter())
+            .chain(new_insert_2)
             .map(|elem| self.alloc_leaf_child(elem, parent_idx.unwrap()))
             .collect();
 
@@ -1058,7 +1010,7 @@ impl<B: BTreeTrait> BTree<B> {
         path.pop();
         let idx = path.last().copied().unwrap_or(Idx::new(self.root, 0));
         debug_assert!(matches!(idx.arena, ArenaIndex::Internal(_)));
-        let node = self.get_internal_node(idx.arena);
+        let node = self.get_internal(idx.arena);
         let mut iter = node.children.iter();
         core::iter::from_fn(move || loop {
             if path.is_empty() {
@@ -1073,7 +1025,7 @@ impl<B: BTreeTrait> BTree<B> {
 
                     let idx = *path.last().unwrap();
                     debug_assert!(matches!(idx.arena, ArenaIndex::Internal(_)));
-                    let node = self.get_internal_node(idx.arena);
+                    let node = self.get_internal(idx.arena);
                     iter = node.children.iter();
                 }
                 Some(elem) => {
@@ -1386,12 +1338,12 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     #[inline(always)]
-    fn get_internal_mut(&mut self, index: ArenaIndex) -> &mut Node<B> {
+    pub fn get_internal_mut(&mut self, index: ArenaIndex) -> &mut Node<B> {
         self.in_nodes.get_mut(index.unwrap_internal()).unwrap()
     }
 
     #[inline(always)]
-    fn get_leaf_mut(&mut self, index: ArenaIndex) -> &mut LeafNode<B::Elem> {
+    pub fn get_leaf_mut(&mut self, index: ArenaIndex) -> &mut LeafNode<B::Elem> {
         self.leaf_nodes.get_mut(index.unwrap_leaf()).unwrap()
     }
 
@@ -1407,12 +1359,12 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// If the given index is not valid or deleted
     #[inline(always)]
-    fn get_internal_node(&self, index: ArenaIndex) -> &Node<B> {
+    pub fn get_internal(&self, index: ArenaIndex) -> &Node<B> {
         self.in_nodes.get(index.unwrap_internal()).unwrap()
     }
 
     #[inline(always)]
-    fn get_leaf_node(&self, index: ArenaIndex) -> &LeafNode<B::Elem> {
+    pub fn get_leaf(&self, index: ArenaIndex) -> &LeafNode<B::Elem> {
         self.leaf_nodes.get(index.unwrap_leaf()).unwrap()
     }
 
@@ -1438,9 +1390,9 @@ impl<B: BTreeTrait> BTree<B> {
             };
         }
 
-        let node = self.get_internal_node(node_idx);
+        let node = self.get_internal(node_idx);
         let parent_idx = node.parent.unwrap();
-        let parent = self.get_internal_node(parent_idx);
+        let parent = self.get_internal(parent_idx);
         debug_assert_eq!(parent.children[node.parent_slot as usize].arena, node_idx,);
         let ans = match self.pair_neighbor(node_idx) {
             Some((a_idx, b_idx)) => {
@@ -1578,8 +1530,8 @@ impl<B: BTreeTrait> BTree<B> {
 
     fn try_reduce_levels(&mut self) {
         let mut reduced = false;
-        while self.get_internal_node(self.root).children.len() == 1 {
-            let root = self.get_internal_node(self.root);
+        while self.get_internal(self.root).children.len() == 1 {
+            let root = self.get_internal(self.root);
             if root.is_child_leaf {
                 break;
             }
@@ -1618,9 +1570,9 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     fn pair_neighbor(&self, this: ArenaIndex) -> Option<(Idx, Idx)> {
-        let node = self.get_internal_node(this);
+        let node = self.get_internal(this);
         let arr = node.parent_slot as usize;
-        let parent = self.get_internal_node(node.parent.unwrap());
+        let parent = self.get_internal(node.parent.unwrap());
 
         if arr == 0 {
             parent
@@ -1720,7 +1672,7 @@ impl<B: BTreeTrait> BTree<B> {
         let depth = path.len();
         let parent_idx = path[depth - 2];
         let this_idx = path[depth - 1];
-        let parent = self.get_internal_node(parent_idx.arena);
+        let parent = self.get_internal(parent_idx.arena);
         match parent.children.get(this_idx.arr + 1) {
             Some(next) => {
                 path[depth - 1] = Idx::new(next.arena, this_idx.arr + 1);
@@ -1730,7 +1682,7 @@ impl<B: BTreeTrait> BTree<B> {
                     return false;
                 }
 
-                let parent = self.get_internal_node(path[depth - 2].arena);
+                let parent = self.get_internal(path[depth - 2].arena);
                 path[depth - 1] = Idx::new(parent.children[0].arena, 0);
             }
         }
@@ -1743,25 +1695,25 @@ impl<B: BTreeTrait> BTree<B> {
             ArenaIndex::Leaf(_) => {
                 let leaf_idx = node_idx.unwrap_leaf();
                 let leaf1 = self.leaf_nodes.get(leaf_idx).unwrap();
-                let parent1 = self.get_internal_node(leaf1.parent());
+                let parent1 = self.get_internal(leaf1.parent());
                 let (leaf, parent, index) =
                     (leaf1, parent1, Self::get_leaf_slot(leaf_idx, parent1));
                 if index + 1 < parent.children.len() {
                     Some(parent.children[index + 1].arena)
                 } else if let Some(parent_next) = self.next_same_level_in_node(leaf.parent()) {
-                    let parent_next = self.get_internal_node(parent_next);
+                    let parent_next = self.get_internal(parent_next);
                     Some(parent_next.children.first().unwrap().arena)
                 } else {
                     None
                 }
             }
             ArenaIndex::Internal(_) => {
-                let node = self.get_internal_node(node_idx);
-                let parent = self.get_internal_node(node.parent?);
+                let node = self.get_internal(node_idx);
+                let parent = self.get_internal(node.parent?);
                 if let Some(next) = parent.children.get(node.parent_slot as usize + 1) {
                     Some(next.arena)
                 } else if let Some(parent_next) = self.next_same_level_in_node(node.parent?) {
-                    let parent_next = self.get_internal_node(parent_next);
+                    let parent_next = self.get_internal(parent_next);
                     parent_next.children.first().map(|x| x.arena)
                 } else {
                     None
@@ -1774,27 +1726,27 @@ impl<B: BTreeTrait> BTree<B> {
         match node_idx {
             ArenaIndex::Leaf(leaf_idx) => {
                 let leaf = self.leaf_nodes.get(leaf_idx).unwrap();
-                let parent = self.get_internal_node(leaf.parent());
+                let parent = self.get_internal(leaf.parent());
                 let index = Self::get_leaf_slot(leaf_idx, parent);
                 if index > 0 {
                     Some(parent.children[index - 1].arena)
                 } else if let Some(parent_next) = self.prev_same_level_in_node(leaf.parent()) {
-                    let parent_next = self.get_internal_node(parent_next);
+                    let parent_next = self.get_internal(parent_next);
                     Some(parent_next.children.last().unwrap().arena)
                 } else {
                     None
                 }
             }
             ArenaIndex::Internal(_) => {
-                let node = self.get_internal_node(node_idx);
-                let parent = self.get_internal_node(node.parent?);
+                let node = self.get_internal(node_idx);
+                let parent = self.get_internal(node.parent?);
                 if node.parent_slot > 0 {
                     let Some(next) = parent.children.get(node.parent_slot as usize - 1) else {
                         unreachable!()
                     };
                     Some(next.arena)
                 } else if let Some(parent_prev) = self.prev_same_level_in_node(node.parent?) {
-                    let parent_prev = self.get_internal_node(parent_prev);
+                    let parent_prev = self.get_internal(parent_prev);
                     parent_prev.children.last().map(|x| x.arena)
                 } else {
                     None
@@ -1828,8 +1780,8 @@ impl<B: BTreeTrait> BTree<B> {
         end_path: &[Idx],
         filter: &dyn Fn(&B::Cache) -> bool,
     ) -> Option<ArenaIndex> {
-        let node = self.get_internal_node(node_idx);
-        let mut parent = self.get_internal_node(node.parent?);
+        let node = self.get_internal(node_idx);
+        let mut parent = self.get_internal(node.parent?);
         let mut next_index = node.parent_slot as usize + 1;
         loop {
             if let Some(next) = parent.children.get(next_index) {
@@ -1848,7 +1800,7 @@ impl<B: BTreeTrait> BTree<B> {
                 &end_path[..end_path.len() - 1],
                 filter,
             ) {
-                parent = self.get_internal_node(parent_next);
+                parent = self.get_internal(parent_next);
                 next_index = 0;
             } else {
                 return None;
@@ -1868,7 +1820,7 @@ impl<B: BTreeTrait> BTree<B> {
         let depth = path.len();
         let parent_idx = path[depth - 2];
         let this_idx = path[depth - 1];
-        let parent = self.get_internal_node(parent_idx.arena);
+        let parent = self.get_internal(parent_idx.arena);
         if this_idx.arr >= 1 {
             let prev = &parent.children[this_idx.arr - 1];
             path[depth - 1] = Idx::new(prev.arena, this_idx.arr - 1);
@@ -1877,7 +1829,7 @@ impl<B: BTreeTrait> BTree<B> {
                 return false;
             }
 
-            let parent = self.get_internal_node(path[depth - 2].arena);
+            let parent = self.get_internal(path[depth - 2].arena);
             path[depth - 1] = Idx::new(
                 parent.children.last().unwrap().arena,
                 parent.children.len() - 1,
@@ -1893,7 +1845,7 @@ impl<B: BTreeTrait> BTree<B> {
         let mut path = smallvec::smallvec![Idx::new(self.root, 0)];
         let mut node_idx = self.root;
         for &index in indexes[1..].iter() {
-            let node = self.get_internal_node(node_idx);
+            let node = self.get_internal(node_idx);
             if node.children.is_empty() {
                 return None;
             }
@@ -1923,7 +1875,7 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.get_internal_node(self.root).is_empty()
+        self.get_internal(self.root).is_empty()
     }
 
     fn get_path(&self, idx: ArenaIndex) -> NodePath {
@@ -1939,7 +1891,7 @@ impl<B: BTreeTrait> BTree<B> {
                     node_idx = ArenaIndex::Internal(node.parent);
                 }
                 ArenaIndex::Internal(_) => {
-                    let node = self.get_internal_node(node_idx);
+                    let node = self.get_internal(node_idx);
                     path.push(Idx::new(node_idx, node.parent_slot as usize));
                     node_idx = node.parent.unwrap();
                 }
@@ -2022,7 +1974,7 @@ impl<B: BTreeTrait> BTree<B> {
 
         let leaf_a = self.leaf_nodes.get(a.leaf.0).unwrap();
         let leaf_b = self.leaf_nodes.get(b.leaf.0).unwrap();
-        let mut node_a = self.get_internal_node(leaf_a.parent());
+        let mut node_a = self.get_internal(leaf_a.parent());
         if leaf_a.parent == leaf_b.parent {
             for child in node_a.children.iter() {
                 if child.arena.unwrap() == a.leaf.0 {
@@ -2034,10 +1986,10 @@ impl<B: BTreeTrait> BTree<B> {
             }
         }
 
-        let mut node_b = self.get_internal_node(leaf_b.parent());
+        let mut node_b = self.get_internal(leaf_b.parent());
         while node_a.parent != node_b.parent {
-            node_a = self.get_internal_node(node_a.parent.unwrap());
-            node_b = self.get_internal_node(node_b.parent.unwrap());
+            node_a = self.get_internal(node_a.parent.unwrap());
+            node_b = self.get_internal(node_b.parent.unwrap());
         }
 
         node_a.parent_slot.cmp(&node_b.parent_slot)
@@ -2056,7 +2008,7 @@ impl<B: BTreeTrait> BTree<B> {
         let path = self.get_path(cursor.leaf.into());
         let mut path_index = 0;
         let mut child_index = 0;
-        let mut node = self.get_internal_node(path[path_index].arena);
+        let mut node = self.get_internal(path[path_index].arena);
         'outer: loop {
             if path_index + 1 >= path.len() {
                 break;
@@ -2065,7 +2017,7 @@ impl<B: BTreeTrait> BTree<B> {
             while child_index == path.get(path_index + 1).map(|x| x.arr).unwrap() {
                 path_index += 1;
                 if path_index + 1 < path.len() {
-                    node = self.get_internal_node(path[path_index].arena);
+                    node = self.get_internal(path[path_index].arena);
                     child_index = 0;
                 } else {
                     break 'outer;
@@ -2120,7 +2072,7 @@ impl<B: BTreeTrait> BTree<B> {
             }
             for (i, child_info) in node.children.iter().enumerate() {
                 if matches!(child_info.arena, ArenaIndex::Internal(_)) {
-                    let child = self.get_internal_node(child_info.arena);
+                    let child = self.get_internal(child_info.arena);
                     let mut cache = Default::default();
                     child.calc_cache(&mut cache, None);
                     assert_eq!(child.parent_slot, i as u8);
@@ -2129,7 +2081,7 @@ impl<B: BTreeTrait> BTree<B> {
                 }
             }
             if let Some(parent) = node.parent {
-                let parent = self.get_internal_node(parent);
+                let parent = self.get_internal(parent);
                 assert_eq!(
                     parent.children[node.parent_slot as usize].arena,
                     ArenaIndex::Internal(index)
@@ -2150,7 +2102,7 @@ impl<B: BTreeTrait> BTree<B> {
             let mut length = 1;
             let mut node_idx = leaf_node.parent;
             while node_idx != self.root.unwrap() {
-                let node = self.get_internal_node(ArenaIndex::Internal(node_idx));
+                let node = self.get_internal(ArenaIndex::Internal(node_idx));
                 length += 1;
                 node_idx = node.parent.unwrap().unwrap();
             }
@@ -2167,7 +2119,7 @@ impl<B: BTreeTrait> BTree<B> {
             }
 
             let cache = B::get_elem_cache(&leaf_node.elem);
-            let parent = self.get_internal_node(leaf_node.parent());
+            let parent = self.get_internal(leaf_node.parent());
             assert_eq!(
                 parent
                     .children
@@ -2207,7 +2159,11 @@ fn delete_range<T: Clone, const N: usize>(
         return;
     }
 
-    let len = end - start;
+    if end - start == 1 {
+        arr.remove(start);
+        return;
+    }
+
     let mut ans = heapless::Vec::from_slice(&arr[..start]).unwrap();
     ans.extend_from_slice(&arr[end..]).unwrap();
     *arr = ans;

@@ -1,6 +1,4 @@
-use crate::{
-    delete_range, ArenaIndex, BTree, BTreeTrait, HeapVec, LeafNode, NodePath, QueryResult,
-};
+use crate::{delete_range, ArenaIndex, BTree, BTreeTrait, LeafNode, NodePath, QueryResult};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
@@ -21,7 +19,6 @@ pub struct Drain<'a, B: BTreeTrait> {
     tree: &'a mut BTree<B>,
     current_path: NodePath,
     done: bool,
-    start_result: QueryResult,
     end_result: Option<QueryResult>,
     store: Option<Box<TempStore>>,
 }
@@ -61,7 +58,6 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
             current_path: tree.get_path(start_result.leaf.into()),
             tree,
             done: false,
-            start_result,
             end_result,
             store: Some(Box::new(TempStore {
                 start_path,
@@ -76,11 +72,6 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
         Self {
             current_path: Default::default(),
             done: true,
-            start_result: QueryResult {
-                leaf: tree.root.unwrap().into(),
-                offset: 0,
-                found: true,
-            },
             end_result: None,
             tree,
             store: None,
@@ -143,8 +134,8 @@ impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
         self.tree.filter_deleted_children(start_path[level].arena);
         self.tree.filter_deleted_children(end_path[level].arena);
         while start_path[level].arena != end_path[level].arena {
-            let start_node = self.tree.get_internal_node(start_path[level].arena);
-            let end_node = self.tree.get_internal_node(end_path[level].arena);
+            let start_node = self.tree.get_internal(start_path[level].arena);
+            let end_node = self.tree.get_internal(end_path[level].arena);
             let del_start = if start_node.is_empty() {
                 start_path[level].arr
             } else {

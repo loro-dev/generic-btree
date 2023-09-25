@@ -9,12 +9,14 @@ pub struct LengthFinder {
 }
 
 impl LengthFinder {
+    #[inline(always)]
     pub fn new() -> Self {
         Self { left: 0 }
     }
 }
 
 impl Default for LengthFinder {
+    #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
@@ -34,6 +36,7 @@ impl<Elem: 'static + HasLength + Debug, B: BTreeTrait<Elem = Elem> + UseLengthFi
         Self { left: *target }
     }
 
+    #[inline(always)]
     fn find_node(
         &mut self,
         _: &Self::QueryArg,
@@ -55,7 +58,7 @@ impl<Elem: 'static + HasLength + Debug, B: BTreeTrait<Elem = Elem> + UseLengthFi
     }
 
     #[inline(always)]
-    fn confirm_elem(&self, q: &Self::QueryArg, elem: &<B as BTreeTrait>::Elem) -> (usize, bool) {
+    fn confirm_elem(&self, _: &Self::QueryArg, elem: &<B as BTreeTrait>::Elem) -> (usize, bool) {
         (self.left, self.left < elem.rle_len())
     }
 }

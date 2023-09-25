@@ -219,7 +219,7 @@ impl BTreeTrait for RopeTrait {
             }
             None => {
                 let new_cache = caches.iter().map(|x| x.cache).sum::<isize>();
-                let diff = new_cache  - *cache;
+                let diff = new_cache - *cache;
                 *cache = new_cache;
                 Some(diff)
             }
@@ -238,6 +238,7 @@ impl BTreeTrait for RopeTrait {
     }
 }
 
+#[allow(unused)]
 fn test_prev_length(rope: &Rope, q: QueryResult) -> usize {
     let mut count = 0;
     rope.tree.visit_previous_caches(q, |cache| match cache {
@@ -245,15 +246,16 @@ fn test_prev_length(rope: &Rope, q: QueryResult) -> usize {
             count += *cache as usize;
         }
         crate::PreviousCache::PrevSiblingElem(p) => {
-            count += p.len() ;
+            count += p.len();
         }
         crate::PreviousCache::ThisElemAndOffset { offset, .. } => {
-            count += offset ;
+            count += offset;
         }
     });
     count
 }
 
+#[allow(unused)]
 fn test_index(rope: &Rope) {
     for index in 0..rope.len() {
         let q = rope.tree.query::<LengthFinder>(&index).unwrap();
