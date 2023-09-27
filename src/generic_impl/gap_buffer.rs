@@ -1,4 +1,4 @@
-use std::ops::RangeBounds;
+use std::ops::{Range, RangeBounds};
 
 use crate::rle::{HasLength, Mergeable, Sliceable};
 
@@ -156,18 +156,10 @@ impl HasLength for GapBuffer {
 }
 
 impl Sliceable for GapBuffer {
-    fn slice(&self, range: impl RangeBounds<usize>) -> Self {
+    fn _slice(&self, range: Range<usize>) -> Self {
         let mut gb = Self::new();
-        let start = match range.start_bound() {
-            std::ops::Bound::Included(x) => *x,
-            std::ops::Bound::Excluded(x) => x + 1,
-            std::ops::Bound::Unbounded => 0,
-        };
-        let end = match range.end_bound() {
-            std::ops::Bound::Included(x) => x + 1,
-            std::ops::Bound::Excluded(x) => *x,
-            std::ops::Bound::Unbounded => self.len(),
-        };
+        let start = range.start;
+        let end = range.end;
 
         let (l, r) = self.as_bytes();
         if start < l.len() {

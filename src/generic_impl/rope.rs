@@ -93,10 +93,10 @@ impl Rope {
             .tree
             .update_leaf_by_search::<LengthFinder>(&index, |leaf, pos| {
                 if leaf.len() + elem.len() < MAX_LEN.max(leaf.capacity()) {
-                    leaf.insert_bytes(pos.offset, elem.as_bytes());
+                    leaf.insert_bytes(pos.cursor().offset, elem.as_bytes());
                     Some((elem.len() as isize, None, None))
                 } else {
-                    let mut right = leaf.split(pos.offset);
+                    let mut right = leaf.split(pos.cursor.offset);
                     if leaf.len() + elem.len() < MAX_LEN {
                         leaf.push_bytes(elem.as_bytes());
                     } else {
@@ -160,7 +160,7 @@ impl Rope {
             let q = self
                 .tree
                 .update_leaf_by_search::<LengthFinder>(&start, |leaf, pos| {
-                    leaf.delete(pos.offset..pos.offset + 1);
+                    leaf.delete(pos.cursor.offset..pos.cursor.offset + 1);
                     Some((-1, None, None))
                 });
             self.cursor = q.0.map(|q| Cursor {
@@ -175,15 +175,15 @@ impl Rope {
         let from = self.tree.query::<LengthFinder>(&start);
         let to = self.tree.query::<LengthFinder>(&end);
         match (from, to) {
-            (Some(from), Some(to)) if from.leaf == to.leaf => {
-                let leaf = self.tree.leaf_nodes.get_mut(from.leaf.0).unwrap();
-                if from.offset == 0 && to.offset == leaf.elem.len() {
+            (Some(from), Some(to)) if from.cursor.leaf == to.cursor.leaf => {
+                let leaf = self.tree.leaf_nodes.get_mut(from.arena()).unwrap();
+                if from.cursor.offset == 0 && to.cursor.offset == leaf.elem.len() {
                     // delete the whole leaf
-                    self.tree.remove_leaf(from);
+                    self.tree.remove_leaf(from.cursor);
                 } else {
-                    leaf.elem.delete(from.offset..to.offset);
+                    leaf.elem.delete(from.cursor.offset..to.cursor.offset);
                     self.tree.recursive_update_cache(
-                        from.leaf.into(),
+                        from.leaf().into(),
                         true,
                         Some(start as isize - end as isize),
                     );
@@ -304,17 +304,18 @@ impl BTreeTrait for RopeTrait {
 #[allow(unused)]
 fn test_prev_length(rope: &Rope, q: QueryResult) -> usize {
     let mut count = 0;
-    rope.tree.visit_previous_caches(q, |cache| match cache {
-        crate::PreviousCache::NodeCache(cache) => {
-            count += *cache as usize;
-        }
-        crate::PreviousCache::PrevSiblingElem(p) => {
-            count += p.len();
-        }
-        crate::PreviousCache::ThisElemAndOffset { offset, .. } => {
-            count += offset;
-        }
-    });
+    rope.tree
+        .visit_previous_caches(q.cursor(), |cache| match cache {
+            crate::PreviousCache::NodeCache(cache) => {
+                count += *cache as usize;
+            }
+            crate::PreviousCache::PrevSiblingElem(p) => {
+                count += p.len();
+            }
+            crate::PreviousCache::ThisElemAndOffset { offset, .. } => {
+                count += offset;
+            }
+        });
     count
 }
 

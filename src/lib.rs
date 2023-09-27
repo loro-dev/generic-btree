@@ -5,11 +5,12 @@ use core::{fmt::Debug, ops::Range};
 use std::{cmp::Ordering, mem::take, ops::RangeBounds};
 
 use fxhash::{FxHashMap, FxHashSet};
-pub use generic_impl::*;
 pub(crate) use heapless::Vec as HeaplessVec;
 use smallvec::SmallVec;
 use thunderdome::Arena;
 use thunderdome::Index as RawArenaIndex;
+
+pub use generic_impl::*;
 
 use crate::rle::{HasLength, Mergeable, Sliceable};
 
@@ -56,12 +57,13 @@ pub struct BTree<B: BTreeTrait> {
     in_nodes: Arena<Node<B>>,
     /// leaf nodes
     leaf_nodes: Arena<LeafNode<B::Elem>>,
-    // root is always internal nodes
+    /// root is always a internal node
+    /// TODO: we may use a constant as root index
     root: ArenaIndex,
     root_cache: B::Cache,
 }
 
-impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
+impl<Elem: Clone, B: BTreeTrait<Elem=Elem>> Clone for BTree<B> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -115,9 +117,14 @@ impl Idx {
 type NodePath = HeaplessVec<Idx, 8>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub struct QueryResult {
+pub struct Cursor {
     pub leaf: LeafIndex,
     pub offset: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+pub struct QueryResult {
+    pub cursor: Cursor,
     pub found: bool,
 }
 
@@ -129,6 +136,13 @@ pub struct QueryResult {
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct LeafIndex(RawArenaIndex);
+
+impl LeafIndex {
+    #[inline(always)]
+    pub fn inner(&self) -> RawArenaIndex {
+        self.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum ArenaIndex {
@@ -176,24 +190,49 @@ impl From<RawArenaIndex> for LeafIndex {
 /// - `start` is Some(start_offset) when it's first element of the given range.
 /// - `end` is Some(end_offset) when it's last element of the given range.
 pub struct ElemSlice<'a, Elem> {
-    path: QueryResult,
+    cursor: Cursor,
     pub elem: &'a Elem,
     pub start: Option<usize>,
     pub end: Option<usize>,
 }
 
 impl<'a, Elem> ElemSlice<'a, Elem> {
-    pub fn path(&self) -> &QueryResult {
-        &self.path
+    pub fn cursor(&self) -> &Cursor {
+        &self.cursor
     }
 }
 
 impl QueryResult {
-    pub fn elem<'b, Elem: Debug, B: BTreeTrait<Elem = Elem>>(
+    pub fn elem<'b, Elem: Debug, B: BTreeTrait<Elem=Elem>>(
         &self,
         tree: &'b BTree<B>,
     ) -> Option<&'b Elem> {
-        tree.leaf_nodes.get(self.leaf.0).map(|x| &x.elem)
+        tree.leaf_nodes.get(self.cursor().leaf.0).map(|x| &x.elem)
+    }
+
+    #[inline(always)]
+    pub fn cursor(&self) -> Cursor {
+        self.cursor
+    }
+
+    #[inline(always)]
+    pub fn leaf(&self) -> LeafIndex {
+        self.cursor().leaf
+    }
+
+    #[inline(always)]
+    pub fn offset(&self) -> usize {
+        self.cursor().offset
+    }
+
+    #[inline(always)]
+    pub fn found(&self) -> bool {
+        self.found
+    }
+
+    #[inline(always)]
+    pub fn arena(&self) -> RawArenaIndex {
+        self.cursor.leaf.0
     }
 }
 
@@ -211,8 +250,7 @@ impl<T> LeafNode<T> {
 
 impl<T: Sliceable> LeafNode<T> {
     fn split(&mut self, offset: usize) -> Self {
-        let new_elem = self.elem.slice(offset..);
-        self.elem.slice_(0..offset);
+        let new_elem = self.elem.split(offset);
         Self {
             elem: new_elem,
             parent: self.parent,
@@ -247,9 +285,9 @@ impl SplittedLeaves {
     }
 }
 
-impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for BTree<B> {
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem, Cache=Cache>> Debug for BTree<B> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        fn fmt_node<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem>>(
+        fn fmt_node<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem>>(
             tree: &BTree<B>,
             node_idx: ArenaIndex,
             f: &mut core::fmt::Formatter<'_>,
@@ -299,7 +337,7 @@ impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug
     }
 }
 
-impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for Node<B> {
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem, Cache=Cache>> Debug for Node<B> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Node")
             .field("children", &self.children)
@@ -307,7 +345,7 @@ impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug
     }
 }
 
-impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for Child<B> {
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem, Cache=Cache>> Debug for Child<B> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Child")
             .field("index", &self.arena)
@@ -316,7 +354,7 @@ impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug
     }
 }
 
-impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for Node<B> {
+impl<Elem: Clone, B: BTreeTrait<Elem=Elem>> Clone for Node<B> {
     fn clone(&self) -> Self {
         Self {
             parent: self.parent,
@@ -449,12 +487,17 @@ impl<B: BTreeTrait> BTree<B> {
     /// Returns (insert_pos, splitted_leaves)
     #[inline]
     pub fn insert<Q>(&mut self, q: &Q::QueryArg, data: B::Elem) -> (LeafIndex, SplittedLeaves)
-    where
-        Q: Query<B>,
+        where
+            Q: Query<B>,
     {
         let Some(result) = self.query::<Q>(q) else {
             return (self.push(data), Default::default());
         };
+
+        self.insert_by_path(result.cursor, data)
+    }
+
+    pub fn insert_by_path(&mut self, result: Cursor, data: B::Elem) -> (LeafIndex, SplittedLeaves) {
         let index = result.leaf;
         let leaf = self.leaf_nodes.get_mut(index.0).unwrap();
         let parent_idx = leaf.parent();
@@ -513,7 +556,7 @@ impl<B: BTreeTrait> BTree<B> {
     /// Split a leaf node at offset if it's not the start/end of the leaf node.
     ///
     /// This method should be called when inserting at target pos.
-    fn split_leaf_if_needed(&mut self, pos: QueryResult) -> SplitInfo {
+    fn split_leaf_if_needed(&mut self, pos: Cursor) -> SplitInfo {
         let leaf = self.leaf_nodes.get_mut(pos.leaf.0).unwrap();
         let parent_idx = leaf.parent;
         let parent = self.in_nodes.get_mut(leaf.parent).unwrap();
@@ -528,10 +571,9 @@ impl<B: BTreeTrait> BTree<B> {
             leaf_slot
         } else if pos.offset == leaf.elem.rle_len() {
             if leaf_slot + 1 < parent.children.len() {
-                new_pos = Some(QueryResult {
+                new_pos = Some(Cursor {
                     leaf: parent.children[leaf_slot + 1].arena.unwrap().into(),
                     offset: 0,
-                    found: true,
                 });
             } else {
                 new_pos = self.next_elem(pos);
@@ -554,10 +596,9 @@ impl<B: BTreeTrait> BTree<B> {
                 ArenaIndex::Leaf(arena_index)
             };
             rt_new_leaf = Some(leaf_arena_index);
-            new_pos = Some(QueryResult {
+            new_pos = Some(Cursor {
                 leaf: leaf_arena_index.unwrap().into(),
                 offset: 0,
-                found: true,
             });
             parent.children[leaf_slot].cache = left_cache;
             parent
@@ -598,21 +639,46 @@ impl<B: BTreeTrait> BTree<B> {
     /// It will invoke [`BTreeTrait::insert_batch`]
     ///
     /// NOTE: Currently this method don't guarantee balance
-    pub fn insert_many_by_query_result(
+    pub fn insert_many_by_cursor(
         &mut self,
-        result: QueryResult,
+        cursor: Option<Cursor>,
         data: Vec<B::Elem>,
     ) -> SplittedLeaves
-    where
-        B::Elem: Clone,
+        where
+            B::Elem: Clone,
     {
+        if cursor.is_none() {
+            assert!(self.is_empty());
+            // Insert directly under root node
+            let children = data
+                .into_iter()
+                .map(|elem| {
+                    let elem_cache = B::get_elem_cache(&elem);
+                    let new_leaf_index = self.alloc_new_leaf(LeafNode {
+                        elem,
+                        parent: self.root.unwrap(),
+                    });
+                    Child {
+                        arena: new_leaf_index,
+                        cache: elem_cache,
+                    }
+                })
+                .collect();
+
+            let root = self.in_nodes.get_mut(self.root.unwrap()).unwrap();
+            root.children = children;
+            B::calc_cache_internal(&mut self.root_cache, &root.children);
+            return Default::default();
+        }
+
+        let cursor = cursor.unwrap();
         // FIXME: array overflow
         let SplitInfo {
             parent_idx: parent_index,
             insert_slot: insert_index,
             new_leaf,
             ..
-        } = self.split_leaf_if_needed(result);
+        } = self.split_leaf_if_needed(cursor);
         let mut splitted = SplittedLeaves::default();
         splitted.push_option(new_leaf);
         let parent = self.in_nodes.get_mut(parent_index).unwrap();
@@ -637,7 +703,7 @@ impl<B: BTreeTrait> BTree<B> {
             .unwrap();
         parent.children = children;
         let is_full = parent.is_full();
-        self.recursive_update_cache(result.leaf.into(), B::USE_DIFF, None);
+        self.recursive_update_cache(cursor.leaf.into(), B::USE_DIFF, None);
         if is_full {
             self.split(ArenaIndex::Internal(parent_index));
         }
@@ -648,9 +714,9 @@ impl<B: BTreeTrait> BTree<B> {
     /// Shift by offset 1.
     ///
     /// It will not stay on empty spans but scan forward
-    pub fn shift_path_by_one_offset(&self, mut path: QueryResult) -> Option<QueryResult>
-    where
-        B::Elem: rle::HasLength,
+    pub fn shift_path_by_one_offset(&self, mut path: Cursor) -> Option<Cursor>
+        where
+            B::Elem: rle::HasLength,
     {
         let leaf = self.leaf_nodes.get(path.leaf.0).unwrap();
         let mut parent_index = leaf.parent;
@@ -699,15 +765,15 @@ impl<B: BTreeTrait> BTree<B> {
     /// Return None if the tree is empty
     #[inline(always)]
     pub fn query<Q>(&self, query: &Q::QueryArg) -> Option<QueryResult>
-    where
-        Q: Query<B>,
+        where
+            Q: Query<B>,
     {
         self.query_with_finder_return::<Q>(query).0
     }
 
     pub fn query_with_finder_return<Q>(&self, query: &Q::QueryArg) -> (Option<QueryResult>, Q)
-    where
-        Q: Query<B>,
+        where
+            Q: Query<B>,
     {
         let mut finder = Q::init(query);
         if self.is_empty() {
@@ -734,8 +800,10 @@ impl<B: BTreeTrait> BTree<B> {
                     );
                     return (
                         Some(QueryResult {
-                            leaf: index.unwrap_leaf().into(),
-                            offset,
+                            cursor: Cursor {
+                                leaf: index.unwrap_leaf().into(),
+                                offset,
+                            },
                             found: found && leaf_found,
                         }),
                         finder,
@@ -759,7 +827,7 @@ impl<B: BTreeTrait> BTree<B> {
     /// Remove leaf node from the tree
     ///
     /// If it's already removed, this method will return None
-    pub fn remove_leaf(&mut self, path: QueryResult) -> Option<B::Elem> {
+    pub fn remove_leaf(&mut self, path: Cursor) -> Option<B::Elem> {
         let Some(leaf) = self.leaf_nodes.get_mut(path.leaf.0) else {
             return None;
         };
@@ -809,15 +877,13 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// F should returns `(should_update_cache, cache_diff)`
     ///
-    /// This method may break the balance of the tree
-    ///
     /// If the given range has zero length, f will still be called, and the slice will
     /// have same `start` and `end` field
     ///
     /// TODO: need better test coverage
-    pub fn update<F>(&mut self, range: Range<QueryResult>, f: &mut F) -> SplittedLeaves
-    where
-        F: FnMut(&mut B::Elem) -> (bool, Option<B::CacheDiff>),
+    pub fn update<F>(&mut self, range: Range<Cursor>, f: &mut F) -> SplittedLeaves
+        where
+            F: FnMut(&mut B::Elem) -> (bool, Option<B::CacheDiff>),
     {
         let mut splitted = SplittedLeaves::default();
         let start = range.start;
@@ -879,7 +945,7 @@ impl<B: BTreeTrait> BTree<B> {
     /// When path.offset == leaf.rle_len(), this method will return
     /// the next leaf node with offset 0
     #[allow(unused)]
-    fn prefer_right(&self, path: QueryResult) -> Option<QueryResult> {
+    pub fn prefer_right(&self, path: Cursor) -> Option<Cursor> {
         if path.offset == 0 {
             return Some(path);
         }
@@ -897,7 +963,7 @@ impl<B: BTreeTrait> BTree<B> {
     /// When path.offset == 0, this method will return
     /// the previous leaf node with offset leaf.rle_len()
     #[allow(unused)]
-    fn prefer_left(&self, path: QueryResult) -> Option<QueryResult> {
+    pub fn prefer_left(&self, path: Cursor) -> Option<Cursor> {
         if path.offset != 0 {
             return Some(path);
         }
@@ -905,10 +971,9 @@ impl<B: BTreeTrait> BTree<B> {
         let elem = self.prev_elem(path);
         if let Some(elem) = elem {
             let leaf = self.leaf_nodes.get(elem.leaf.0).unwrap();
-            Some(QueryResult {
+            Some(Cursor {
                 leaf: elem.leaf,
                 offset: leaf.elem.rle_len(),
-                found: true,
             })
         } else {
             None
@@ -930,7 +995,7 @@ impl<B: BTreeTrait> BTree<B> {
             &mut B::Elem,
             QueryResult,
         ) -> Option<(B::CacheDiff, Option<B::Elem>, Option<B::Elem>)>,
-    ) -> (Option<QueryResult>, SplittedLeaves) {
+    ) -> (Option<Cursor>, SplittedLeaves) {
         if self.is_empty() {
             panic!("update_leaf_by_search called on empty tree");
         }
@@ -945,7 +1010,7 @@ impl<B: BTreeTrait> BTree<B> {
                 arena: ArenaIndex::Internal(node_idx_inner),
                 arr: child_arr_pos,
             })
-            .unwrap();
+                .unwrap();
             let node = self.in_nodes.get(node_idx_inner).unwrap();
             let result = finder.find_node(q, &node.children);
             child_arr_pos = result.index;
@@ -955,12 +1020,14 @@ impl<B: BTreeTrait> BTree<B> {
         let leaf = self.get_leaf_mut(node_idx);
         let (offset, found) = finder.confirm_elem(q, &leaf.elem);
         let ans = QueryResult {
-            leaf: node_idx.unwrap_leaf().into(),
-            offset,
+            cursor: Cursor {
+                leaf: node_idx.unwrap_leaf().into(),
+                offset,
+            },
             found,
         };
         let Some((diff, new_insert_1, new_insert_2)) = f(&mut leaf.elem, ans) else {
-            return (Some(ans), splitted);
+            return (Some(ans.cursor), splitted);
         };
 
         if new_insert_2.is_some() {
@@ -980,9 +1047,9 @@ impl<B: BTreeTrait> BTree<B> {
 
             // iterate from leaf to root, child to parent
             while let Some(Idx {
-                arena: parent_idx,
-                arr: parent_arr_pos,
-            }) = path.pop()
+                               arena: parent_idx,
+                               arr: parent_arr_pos,
+                           }) = path.pop()
             {
                 let parent = self.get_internal_mut(parent_idx);
                 if is_first {
@@ -1024,9 +1091,9 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         while let Some(Idx {
-            arena: parent_idx,
-            arr: parent_arr_pos,
-        }) = path.pop()
+                           arena: parent_idx,
+                           arr: parent_arr_pos,
+                       }) = path.pop()
         {
             let parent = self.get_internal_mut(parent_idx);
             match take(&mut new_cache_and_child) {
@@ -1056,7 +1123,7 @@ impl<B: BTreeTrait> BTree<B> {
             B::apply_cache_diff(&mut self.root_cache, &diff);
         }
 
-        (Some(ans), splitted)
+        (Some(ans.cursor), splitted)
     }
 
     /// Update leaf node's elements, return true if cache need to be updated
@@ -1181,7 +1248,7 @@ impl<B: BTreeTrait> BTree<B> {
         node.children = children;
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &B::Elem> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item=&B::Elem> + '_ {
         let mut path = self.first_path().unwrap_or_default();
         path.pop();
         let idx = path.last().copied().unwrap_or(Idx::new(self.root, 0));
@@ -1210,6 +1277,18 @@ impl<B: BTreeTrait> BTree<B> {
                 }
             }
         })
+    }
+
+    #[inline]
+    pub fn drain(&mut self, range: Range<QueryResult>) -> iter::Drain<B> {
+        iter::Drain::new(self, Some(range.start), Some(range.end))
+    }
+
+    #[inline]
+    pub fn drain_by_query<Q: Query<B>>(&mut self, range: Range<Q::QueryArg>) -> iter::Drain<B> {
+        let start = self.query::<Q>(&range.start);
+        let end = self.query::<Q>(&range.end);
+        iter::Drain::new(self, start, end)
     }
 
     fn first_path(&self) -> Option<NodePath> {
@@ -1294,8 +1373,8 @@ impl<B: BTreeTrait> BTree<B> {
 
     #[inline(always)]
     pub fn range<Q>(&self, range: Range<Q::QueryArg>) -> Option<Range<QueryResult>>
-    where
-        Q: Query<B>,
+        where
+            Q: Query<B>,
     {
         if self.is_empty() {
             return None;
@@ -1307,8 +1386,8 @@ impl<B: BTreeTrait> BTree<B> {
     #[inline]
     pub fn iter_range(
         &self,
-        range: impl RangeBounds<QueryResult>,
-    ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
+        range: impl RangeBounds<Cursor>,
+    ) -> impl Iterator<Item=ElemSlice<'_, B::Elem>> + '_ {
         let start = match range.start_bound() {
             std::ops::Bound::Included(start) => *start,
             std::ops::Bound::Excluded(_) => unreachable!(),
@@ -1324,9 +1403,9 @@ impl<B: BTreeTrait> BTree<B> {
 
     fn _iter_range(
         &self,
-        start: QueryResult,
-        end: QueryResult,
-    ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
+        start: Cursor,
+        end: Cursor,
+    ) -> impl Iterator<Item=ElemSlice<'_, B::Elem>> + '_ {
         let node_iter = iter::Iter::new(
             self,
             self.get_path(start.leaf.into()),
@@ -1335,11 +1414,7 @@ impl<B: BTreeTrait> BTree<B> {
         node_iter.map(move |(path, node)| {
             let leaf = LeafIndex(path.last().unwrap().arena.unwrap_leaf());
             ElemSlice {
-                path: QueryResult {
-                    leaf,
-                    offset: 0,
-                    found: true,
-                },
+                cursor: Cursor { leaf, offset: 0 },
                 elem: &node.elem,
                 start: if start.leaf == leaf {
                     Some(start.offset)
@@ -1356,25 +1431,24 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     #[inline(always)]
-    pub fn first_full_path(&self) -> QueryResult {
-        QueryResult {
+    pub fn first_full_path(&self) -> Cursor {
+        Cursor {
             leaf: self.first_leaf().unwrap_leaf().into(),
             offset: 0,
-            found: false,
         }
     }
 
     #[inline(always)]
-    pub fn last_full_path(&self) -> QueryResult {
+    pub fn last_full_path(&self) -> Cursor {
         let leaf = self.last_leaf();
-        QueryResult {
+        let node = self.get_leaf(leaf);
+        Cursor {
             leaf: leaf.unwrap_leaf().into(),
-            offset: 0,
-            found: false,
+            offset: node.elem.rle_len(),
         }
     }
 
-    /// Split the internal node at path into two nodes.
+    /// Split the internal node at path into two nodes recursively upwards.
     ///
     // at call site the cache at path can be out-of-date.
     // the cache will be up-to-date after this method
@@ -1594,7 +1668,7 @@ impl<B: BTreeTrait> BTree<B> {
         let node = self.get_internal(node_idx);
         let parent_idx = node.parent.unwrap();
         let parent = self.get_internal(parent_idx);
-        debug_assert_eq!(parent.children[node.parent_slot as usize].arena, node_idx,);
+        debug_assert_eq!(parent.children[node.parent_slot as usize].arena, node_idx, );
         let ans = match self.pair_neighbor(node_idx) {
             Some((a_idx, b_idx)) => {
                 let parent = self.get_internal_mut(parent_idx);
@@ -1980,21 +2054,19 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     /// find the next element in the tree
-    pub fn next_elem(&self, path: QueryResult) -> Option<QueryResult> {
+    pub fn next_elem(&self, path: Cursor) -> Option<Cursor> {
         self.next_same_level_in_node(path.leaf.into())
-            .map(|x| QueryResult {
+            .map(|x| Cursor {
                 leaf: x.unwrap_leaf().into(),
                 offset: 0,
-                found: true,
             })
     }
 
-    pub fn prev_elem(&self, path: QueryResult) -> Option<QueryResult> {
+    pub fn prev_elem(&self, path: Cursor) -> Option<Cursor> {
         self.prev_same_level_in_node(path.leaf.into())
-            .map(|x| QueryResult {
+            .map(|x| Cursor {
                 leaf: x.unwrap_leaf().into(),
                 offset: 0,
-                found: true,
             })
     }
 
@@ -2181,7 +2253,7 @@ impl<B: BTreeTrait> BTree<B> {
             let data = self.alloc_leaf_child(elem, parent_idx);
             let parent = self.in_nodes.get_mut(parent_idx).unwrap();
             let ans = data.arena;
-            parent.children.push(data).unwrap();
+            parent.children.insert(0, data).unwrap();
             is_full = parent.is_full();
             ans.unwrap().into()
         };
@@ -2195,7 +2267,7 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     /// compare the position of a and b
-    pub fn compare_pos(&self, a: QueryResult, b: QueryResult) -> Ordering {
+    pub fn compare_pos(&self, a: Cursor, b: Cursor) -> Ordering {
         if a.leaf == b.leaf {
             return a.offset.cmp(&b.offset);
         }
@@ -2228,9 +2300,9 @@ impl<B: BTreeTrait> BTree<B> {
     /// For example, if all nodes in a subtree need to be visited, we will only visit the root cache.
     ///
     /// f: (node_cache, previous_sibling_elem, (this_elem, offset))
-    pub fn visit_previous_caches<F>(&self, cursor: QueryResult, mut f: F)
-    where
-        F: FnMut(PreviousCache<'_, B>),
+    pub fn visit_previous_caches<F>(&self, cursor: Cursor, mut f: F)
+        where
+            F: FnMut(PreviousCache<'_, B>),
     {
         // the last index of path points to the leaf element
         let path = self.get_path(cursor.leaf.into());
@@ -2368,7 +2440,7 @@ impl<B: BTreeTrait> BTree<B> {
 }
 
 struct SplitInfo {
-    new_pos: Option<QueryResult>,
+    new_pos: Option<Cursor>,
     parent_idx: RawArenaIndex,
     insert_slot: usize,
     new_leaf: Option<ArenaIndex>,

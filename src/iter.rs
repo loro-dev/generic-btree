@@ -1,4 +1,4 @@
-use crate::{delete_range, ArenaIndex, BTree, BTreeTrait, LeafNode, NodePath, QueryResult};
+use crate::{delete_range, ArenaIndex, BTree, BTreeTrait, Cursor, LeafNode, NodePath, QueryResult};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
@@ -19,7 +19,7 @@ pub struct Drain<'a, B: BTreeTrait> {
     tree: &'a mut BTree<B>,
     current_path: NodePath,
     done: bool,
-    end_result: Option<QueryResult>,
+    end_cursor: Option<Cursor>,
     store: Option<Box<TempStore>>,
 }
 
@@ -35,8 +35,8 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
 
         let start_result = start_result.unwrap();
         let end_result = end_result.unwrap();
-        let end_result = tree.split_leaf_if_needed(end_result).new_pos;
-        let Some(start_result) = tree.split_leaf_if_needed(start_result).new_pos else {
+        let end_result = tree.split_leaf_if_needed(end_result.cursor).new_pos;
+        let Some(start_result) = tree.split_leaf_if_needed(start_result.cursor).new_pos else {
             // if start from the right most leaf, the range is empty
             return Self::none(tree);
         };
@@ -58,7 +58,7 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
             current_path: tree.get_path(start_result.leaf.into()),
             tree,
             done: false,
-            end_result,
+            end_cursor: end_result,
             store: Some(Box::new(TempStore {
                 start_path,
                 end_path,
@@ -72,7 +72,7 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
         Self {
             current_path: Default::default(),
             done: true,
-            end_result: None,
+            end_cursor: None,
             tree,
             store: None,
         }
@@ -88,8 +88,8 @@ impl<'a, B: BTreeTrait> Iterator for Drain<'a, B> {
         }
 
         // end iteration if pointing to the end leaf
-        if let Some(end_result) = self.end_result {
-            if end_result.leaf.0 == self.current_path.last().unwrap().arena.unwrap_leaf() {
+        if let Some(end_cursor) = self.end_cursor {
+            if end_cursor.leaf.0 == self.current_path.last().unwrap().arena.unwrap_leaf() {
                 return None;
             }
         }

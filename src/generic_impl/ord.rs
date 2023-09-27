@@ -1,6 +1,6 @@
 use core::fmt::Debug;
 use std::cmp::Ordering;
-use std::ops::RangeBounds;
+use std::ops::Range;
 
 use crate::rle::{HasLength, Mergeable, Sliceable};
 use crate::{BTree, BTreeTrait, FindResult, Query, SplitInfo};
@@ -41,15 +41,15 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
             self.len += 1;
             let tree = &mut self.tree;
             let data = Unmergeable((key, value));
-            let index = result.leaf;
+            let index = result.leaf();
             let leaf = tree.leaf_nodes.get_mut(index.0).unwrap();
             let parent = leaf.parent();
 
             let mut is_full = false;
             // Try to merge
-            if result.offset == 0 && data.can_merge(&leaf.elem) {
+            if result.cursor.offset == 0 && data.can_merge(&leaf.elem) {
                 leaf.elem.merge_left(&data);
-            } else if result.offset == leaf.elem.rle_len() && leaf.elem.can_merge(&data) {
+            } else if result.cursor.offset == leaf.elem.rle_len() && leaf.elem.can_merge(&data) {
                 leaf.elem.merge_right(&data);
             } else {
                 // Insert new leaf node
@@ -58,7 +58,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
                     parent_idx: parent_index,
                     insert_slot: insert_index,
                     ..
-                } = tree.split_leaf_if_needed(result);
+                } = tree.split_leaf_if_needed(result.cursor);
                 let parent = tree.in_nodes.get_mut(parent_index).unwrap();
                 parent.children.insert(insert_index, child).unwrap();
                 is_full = parent.is_full();
@@ -69,7 +69,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
                 tree.split(parent);
             }
         } else {
-            let leaf = self.tree.get_elem_mut(result.leaf).unwrap();
+            let leaf = self.tree.get_elem_mut(result.leaf()).unwrap();
             leaf.0 .1 = value;
         }
     }
@@ -79,7 +79,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
         let Some(q) = self.tree.query::<OrdTrait<Key, Value>>(key) else {
             return None;
         };
-        match self.tree.remove_leaf(q) {
+        match self.tree.remove_leaf(q.cursor) {
             Some(v) => {
                 self.len -= 1;
                 Some(v.0)
@@ -185,19 +185,8 @@ impl<T> HasLength for Unmergeable<T> {
 }
 
 impl<T: Clone> Sliceable for Unmergeable<T> {
-    fn slice(&self, range: impl RangeBounds<usize>) -> Self {
-        let start = match range.start_bound() {
-            std::ops::Bound::Included(x) => *x,
-            std::ops::Bound::Excluded(x) => x + 1,
-            std::ops::Bound::Unbounded => 0,
-        };
-        let end = match range.end_bound() {
-            std::ops::Bound::Included(x) => x + 1,
-            std::ops::Bound::Excluded(x) => *x,
-            std::ops::Bound::Unbounded => 1,
-        };
-
-        if end - start != 1 {
+    fn _slice(&self, range: Range<usize>) -> Self {
+        if range.end - range.start != 1 {
             panic!("Invalid range");
         }
 
@@ -342,11 +331,20 @@ mod test {
 
         for i in 0..99 {
             let a = tree.0.tree.query::<OrdTrait<u64, ()>>(&i).unwrap();
-            assert_eq!(tree.0.tree.compare_pos(a, a), Ordering::Equal);
+            assert_eq!(
+                tree.0.tree.compare_pos(a.cursor(), a.cursor()),
+                Ordering::Equal
+            );
             for j in i + 1..100 {
                 let b = tree.0.tree.query::<OrdTrait<u64, ()>>(&j).unwrap();
-                assert_eq!(tree.0.tree.compare_pos(a, b), Ordering::Less);
-                assert_eq!(tree.0.tree.compare_pos(b, a), Ordering::Greater);
+                assert_eq!(
+                    tree.0.tree.compare_pos(a.cursor(), b.cursor()),
+                    Ordering::Less
+                );
+                assert_eq!(
+                    tree.0.tree.compare_pos(b.cursor(), a.cursor()),
+                    Ordering::Greater
+                );
             }
         }
     }

@@ -25,10 +25,11 @@ impl RangeNumMap {
     pub fn insert(&mut self, range: Range<usize>, value: isize) {
         self.reserve_range(&range);
         if let Some(range) = self.0.range::<LengthFinder>(range.clone()) {
-            self.0.update(range.start..range.end, &mut |slice| {
-                slice.value = Some(value);
-                (false, None)
-            });
+            self.0
+                .update(range.start.cursor..range.end.cursor, &mut |slice| {
+                    slice.value = Some(value);
+                    (false, None)
+                });
         } else {
             assert_eq!(range.start, 0);
             self.0.push(Elem {
@@ -47,7 +48,7 @@ impl RangeNumMap {
             return None;
         }
 
-        self.0.get_elem(result.leaf).and_then(|x| x.value)
+        self.0.get_elem(result.leaf()).and_then(|x| x.value)
     }
 
     pub fn iter(&mut self) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
@@ -64,13 +65,14 @@ impl RangeNumMap {
     pub fn plus(&mut self, range: Range<usize>, change: isize) {
         self.reserve_range(&range);
         if let Some(range) = self.0.range::<LengthFinder>(range) {
-            self.0.update(range.start..range.end, &mut |slice| {
-                if let Some(v) = &mut slice.value {
-                    *v += change;
-                }
+            self.0
+                .update(range.start.cursor..range.end.cursor, &mut |slice| {
+                    if let Some(v) = &mut slice.value {
+                        *v += change;
+                    }
 
-                (false, None)
-            });
+                    (false, None)
+                });
         }
     }
 
@@ -132,19 +134,10 @@ impl Mergeable for Elem {
 }
 
 impl Sliceable for Elem {
-    fn slice(&self, range: impl std::ops::RangeBounds<usize>) -> Self {
-        let len = match range.end_bound() {
-            std::ops::Bound::Included(x) => x + 1,
-            std::ops::Bound::Excluded(x) => *x,
-            std::ops::Bound::Unbounded => self.len,
-        } - match range.start_bound() {
-            std::ops::Bound::Included(x) => *x,
-            std::ops::Bound::Excluded(x) => x + 1,
-            std::ops::Bound::Unbounded => 0,
-        };
+    fn _slice(&self, range: Range<usize>) -> Self {
         Elem {
             value: self.value,
-            len,
+            len: range.len(),
         }
     }
 
