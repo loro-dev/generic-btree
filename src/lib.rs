@@ -22,8 +22,6 @@ pub type HeapVec<T> = Vec<T>;
 
 const MAX_CHILDREN_NUM: usize = 16;
 
-// TODO: Cache cursor
-
 /// `Elem` should has length. `offset` in search result should always >= `Elem.rle_len()`
 pub trait BTreeTrait {
     type Elem: Debug + HasLength + Sliceable + Mergeable;
@@ -419,9 +417,11 @@ impl<B: BTreeTrait> Node<B> {
 
 type LeafDirtyMap<Diff> = FxHashMap<ArenaIndex, Option<Diff>>;
 
+/// Whether the parent node is lack of children
 #[repr(transparent)]
 struct LackInfo {
-    is_parent_lack: bool,
+    /// if Some, the parent node is lack
+    parent_lack: Option<ArenaIndex>,
 }
 
 impl<B: BTreeTrait> BTree<B> {
@@ -607,7 +607,6 @@ impl<B: BTreeTrait> BTree<B> {
         B::Elem: Clone,
     {
         // FIXME: array overflow
-        // TODO: returns path and splitted nodes
         let SplitInfo {
             parent_idx: parent_index,
             insert_slot: insert_index,
@@ -777,7 +776,7 @@ impl<B: BTreeTrait> BTree<B> {
         if is_empty {
             self.remove_internal_node(parent_idx.unwrap());
         } else if is_lack {
-            self.handle_lack(parent_idx);
+            self.handle_lack_recursively(parent_idx);
         }
 
         Some(elem)
@@ -798,7 +797,7 @@ impl<B: BTreeTrait> BTree<B> {
             if is_empty {
                 self.remove_internal_node(parent_idx.unwrap_internal());
             } else if is_lack {
-                self.handle_lack(parent_idx);
+                self.handle_lack_recursively(parent_idx);
             }
         } else {
             // ignore remove root
@@ -996,7 +995,7 @@ impl<B: BTreeTrait> BTree<B> {
                 let is_lack = parent.is_lack();
 
                 if is_child_lack {
-                    self.handle_lack(child_idx);
+                    self.handle_lack_single_layer(child_idx);
                 }
 
                 is_child_lack = is_lack;
@@ -1091,7 +1090,7 @@ impl<B: BTreeTrait> BTree<B> {
             parent.children.remove(slot);
             let is_lack = parent.is_lack();
             if is_lack {
-                self.handle_lack(parent_idx);
+                self.handle_lack_recursively(parent_idx);
             }
 
             (false, splitted)
@@ -1567,7 +1566,7 @@ impl<B: BTreeTrait> BTree<B> {
         self.in_nodes.get(index.unwrap_internal())
     }
 
-    /// The given node is lack of children/elements.
+    /// The given node is lack of children.
     /// We should merge it into its neighbor or borrow from its neighbor.
     ///
     /// Given a random neighbor is neither full or lack, it's guaranteed
@@ -1576,15 +1575,20 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// - The caches in parent's subtree should be up-to-date when calling this.
     /// - The caches in the parent node will be updated
+    fn handle_lack_recursively(&mut self, node_idx: ArenaIndex) {
+        let mut lack_info = self.handle_lack_single_layer(node_idx);
+        while let Some(parent) = lack_info.parent_lack {
+            lack_info = self.handle_lack_single_layer(parent);
+        }
+    }
+
+    /// The given node is lack of children. This method doesn't handle parent's lack.
     ///
-    /// return is parent lack
-    ///
-    /// FIXME: most of the caller call this method incorrectly
-    fn handle_lack(&mut self, node_idx: ArenaIndex) -> LackInfo {
+    /// - The caches in parent's subtree should be up-to-date when calling this.
+    /// - The caches in the parent node will be updated
+    fn handle_lack_single_layer(&mut self, node_idx: ArenaIndex) -> LackInfo {
         if self.root == node_idx {
-            return LackInfo {
-                is_parent_lack: false,
-            };
+            return LackInfo { parent_lack: None };
         }
 
         let node = self.get_internal(node_idx);
@@ -1641,7 +1645,11 @@ impl<B: BTreeTrait> BTree<B> {
                     parent.children[a_idx.arr].cache = a_cache;
                     parent.children[b_idx.arr].cache = b_cache;
                     LackInfo {
-                        is_parent_lack: parent.is_lack(),
+                        parent_lack: if parent.is_lack() {
+                            Some(parent_idx)
+                        } else {
+                            None
+                        },
                     }
                 } else {
                     // merge
@@ -1687,10 +1695,15 @@ impl<B: BTreeTrait> BTree<B> {
                         is_lack
                     };
 
-                    LackInfo { is_parent_lack }
+                    LackInfo {
+                        parent_lack: if is_parent_lack {
+                            Some(parent_idx)
+                        } else {
+                            None
+                        },
+                    }
                 };
 
-                // TODO: only in debug mode
                 if cfg!(debug_assertions) {
                     let (a, b) = self
                         .in_nodes
@@ -1719,7 +1732,7 @@ impl<B: BTreeTrait> BTree<B> {
                 ans
             }
             None => LackInfo {
-                is_parent_lack: true,
+                parent_lack: Some(parent_idx),
             },
         };
         ans

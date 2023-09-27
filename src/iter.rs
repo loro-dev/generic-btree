@@ -253,8 +253,8 @@ fn handle_lack_on_path_to_leaf<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIn
             };
             let is_lack = node.is_lack();
             if is_lack {
-                let lack_info = tree.handle_lack(path[i].arena);
-                if lack_info.is_parent_lack {
+                let lack_info = tree.handle_lack_single_layer(path[i].arena);
+                if lack_info.parent_lack.is_some() {
                     lack_count += 1;
                 }
             }
