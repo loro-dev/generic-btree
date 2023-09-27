@@ -1,8 +1,8 @@
 use std::{ops::Range, usize};
 
 use generic_btree::{
-    BTree,
-    BTreeTrait, LengthFinder, rle::{HasLength, Mergeable, Sliceable}, UseLengthFinder,
+    rle::{HasLength, Mergeable, Sliceable},
+    BTree, BTreeTrait, LengthFinder, UseLengthFinder,
 };
 
 /// This struct keep the mapping of ranges to numbers
@@ -34,7 +34,7 @@ impl RangeNumMap {
             self.0.push(Elem {
                 value: Some(value),
                 len: range.len(),
-            })
+            });
         }
     }
 
@@ -50,7 +50,7 @@ impl RangeNumMap {
         self.0.get_elem(result.leaf).and_then(|x| x.value)
     }
 
-    pub fn iter(&mut self) -> impl Iterator<Item=(Range<usize>, isize)> + '_ {
+    pub fn iter(&mut self) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
         let mut index = 0;
         self.0.iter().filter_map(move |elem| {
             let len = elem.len;
@@ -86,7 +86,7 @@ impl RangeNumMap {
     pub fn drain(
         &mut self,
         range: Range<usize>,
-    ) -> impl Iterator<Item=(Range<usize>, isize)> + '_ {
+    ) -> impl Iterator<Item = (Range<usize>, isize)> + '_ {
         let mut index = range.start;
         let self1 = &self.0;
         let from = self1.query::<LengthFinder>(&range.start);
@@ -149,8 +149,8 @@ impl Sliceable for Elem {
     }
 
     fn slice_(&mut self, range: impl std::ops::RangeBounds<usize>)
-        where
-            Self: Sized,
+    where
+        Self: Sized,
     {
         let len = match range.end_bound() {
             std::ops::Bound::Included(x) => x + 1,

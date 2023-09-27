@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use std::ops::RangeBounds;
 
 use crate::rle::{HasLength, Mergeable, Sliceable};
-use crate::{BTree, BTreeTrait, FindResult, MoveEvent, MoveListener, Query};
+use crate::{BTree, BTreeTrait, FindResult, Query, SplitInfo};
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -49,26 +49,16 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
             // Try to merge
             if result.offset == 0 && data.can_merge(&leaf.elem) {
                 leaf.elem.merge_left(&data);
-                let leaf1 = Some(index);
-                if let Some(listener) = tree.element_move_listener.as_ref() {
-                    listener(MoveEvent {
-                        target_leaf: leaf1,
-                        elem: &data,
-                    });
-                }
             } else if result.offset == leaf.elem.rle_len() && leaf.elem.can_merge(&data) {
                 leaf.elem.merge_right(&data);
-                let leaf1 = Some(index);
-                if let Some(listener) = tree.element_move_listener.as_ref() {
-                    listener(MoveEvent {
-                        target_leaf: leaf1,
-                        elem: &data,
-                    });
-                }
             } else {
                 // Insert new leaf node
                 let child = tree.alloc_leaf_child(data, parent.unwrap_internal());
-                let (_, parent_index, insert_index) = tree.split_leaf_if_needed(result);
+                let SplitInfo {
+                    parent_idx: parent_index,
+                    insert_slot: insert_index,
+                    ..
+                } = tree.split_leaf_if_needed(result);
                 let parent = tree.in_nodes.get_mut(parent_index).unwrap();
                 parent.children.insert(insert_index, child).unwrap();
                 is_full = parent.is_full();
@@ -96,10 +86,6 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
             }
             None => None,
         }
-    }
-
-    pub fn set_listener(&mut self, listener: Option<MoveListener<Unmergeable<(Key, Value)>>>) {
-        self.tree.set_listener(listener);
     }
 
     #[inline(always)]
@@ -366,82 +352,26 @@ mod test {
     }
 
     mod move_event_test {
-        use std::{
-            collections::HashMap,
-            sync::{Arc, Mutex},
-        };
-
-        use crate::LeafIndex;
 
         use super::*;
 
         #[test]
         fn test() {
             let mut tree: OrdTreeMap<u64, usize> = OrdTreeMap::new();
-            let record: Arc<Mutex<HashMap<u64, LeafIndex>>> = Default::default();
             let mut rng = rand::rngs::StdRng::seed_from_u64(123);
             let mut data: HeapVec<u64> = (0..1000).map(|_| rng.gen()).collect();
-            let record_clone = record.clone();
-            tree.set_listener(Some(Box::new(move |event| {
-                if let Some(leaf) = event.target_leaf {
-                    let mut record = record.lock().unwrap();
-                    record.insert(event.elem.0 .0, leaf);
-                } else {
-                    let mut record = record.lock().unwrap();
-                    record.remove(&event.elem.0 .0);
-                }
-            })));
             for &value in data.iter() {
                 tree.insert(value, 0);
-            }
-            {
-                let record = record_clone.lock().unwrap();
-                assert_eq!(record.len(), 1000);
-                for &value in data.iter() {
-                    let index = record.get(&value).unwrap();
-                    let node = tree.tree.get_elem(*index).unwrap();
-                    assert_eq!(node.0 .0, value);
-                }
             }
             for value in data.drain(0..100) {
                 tree.delete(&value);
             }
-            {
-                let record = record_clone.lock().unwrap();
-                assert_eq!(record.len(), 900);
-                assert_eq!(tree.len, 900);
-                for &value in data.iter() {
-                    let index = record.get(&value).unwrap();
-                    let node = tree.tree.get_elem(*index).unwrap();
-                    assert_eq!(node.0 .0, value);
-                }
-            }
             for value in data.drain(0..800) {
                 tree.delete(&value);
             }
-            {
-                let record = record_clone.lock().unwrap();
-                assert_eq!(record.len(), 100);
-                assert_eq!(tree.len, 100);
-                for &value in data.iter() {
-                    let index = record.get(&value).unwrap();
-                    let node = tree.tree.get_elem(*index).unwrap();
-                    assert_eq!(node.0 .0, value);
-                }
-            }
             tree.tree.check();
-            for i in (0..100).rev() {
+            for _ in (0..100).rev() {
                 tree.delete(&data.pop().unwrap());
-                {
-                    let record = record_clone.lock().unwrap();
-                    assert_eq!(record.len(), i);
-                    assert_eq!(tree.len, i);
-                    for &value in data.iter() {
-                        let index = record.get(&value).unwrap();
-                        let node = tree.tree.get_elem(*index).unwrap();
-                        assert_eq!(node.0 .0, value);
-                    }
-                }
             }
         }
     }

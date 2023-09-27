@@ -21,6 +21,7 @@ struct Cursor {
     leaf: LeafIndex,
 }
 
+// TODO: move Rope into a separate project
 #[derive(Debug)]
 pub struct Rope {
     tree: BTree<RopeTrait>,
@@ -60,21 +61,24 @@ impl Rope {
                 let node = self.tree.leaf_nodes.get(leaf.0).unwrap();
                 if index <= pos + node.elem.len() {
                     let offset = index - pos;
-                    let valid = self.tree.update_leaf(leaf, |leaf| {
-                        if leaf.len() + elem.len() < MAX_LEN.max(leaf.capacity()) {
-                            leaf.insert_bytes(offset, elem.as_bytes());
-                            (true, Some(elem.len() as isize), None, None)
-                        } else {
-                            let mut right = leaf.split(offset);
-                            if leaf.len() + elem.len() < MAX_LEN {
-                                leaf.push_bytes(elem.as_bytes());
+                    let valid = self
+                        .tree
+                        .update_leaf(leaf, |leaf| {
+                            if leaf.len() + elem.len() < MAX_LEN.max(leaf.capacity()) {
+                                leaf.insert_bytes(offset, elem.as_bytes());
+                                (true, Some(elem.len() as isize), None, None)
                             } else {
-                                right.insert_bytes(0, elem.as_bytes());
-                            }
+                                let mut right = leaf.split(offset);
+                                if leaf.len() + elem.len() < MAX_LEN {
+                                    leaf.push_bytes(elem.as_bytes());
+                                } else {
+                                    right.insert_bytes(0, elem.as_bytes());
+                                }
 
-                            (true, Some(elem.len() as isize), Some(right), None)
-                        }
-                    });
+                                (true, Some(elem.len() as isize), Some(right), None)
+                            }
+                        })
+                        .0;
 
                     if !valid {
                         self.cursor = None;
@@ -102,7 +106,7 @@ impl Rope {
                     Some((elem.len() as isize, Some(right), None))
                 }
             });
-        self.cursor = q.map(|q| Cursor {
+        self.cursor = q.0.map(|q| Cursor {
             pos: index - q.offset,
             leaf: q.leaf,
         });
@@ -135,10 +139,13 @@ impl Rope {
                 if end <= pos + node.elem.len() {
                     let start_offset = start - pos;
                     let end_offset = end - pos;
-                    let valid = self.tree.update_leaf(leaf, |leaf| {
-                        leaf.delete(start_offset..end_offset);
-                        (true, Some(start as isize - end as isize), None, None)
-                    });
+                    let valid = self
+                        .tree
+                        .update_leaf(leaf, |leaf| {
+                            leaf.delete(start_offset..end_offset);
+                            (true, Some(start as isize - end as isize), None, None)
+                        })
+                        .0;
 
                     if !valid {
                         self.cursor = None;
@@ -156,12 +163,11 @@ impl Rope {
                     leaf.delete(pos.offset..pos.offset + 1);
                     Some((-1, None, None))
                 });
-            if let Some(q) = q {
-                self.cursor = Some(Cursor {
-                    pos: start - q.offset,
-                    leaf: q.leaf,
-                });
-            }
+            self.cursor = q.0.map(|q| Cursor {
+                pos: start - q.offset,
+                leaf: q.leaf,
+            });
+
             return;
         }
 
@@ -232,7 +238,7 @@ impl Rope {
     }
 
     #[allow(unused)]
-    fn check(&self) {
+    pub fn check(&self) {
         // dbg!(&self.tree);
         self.tree.check()
     }
@@ -323,6 +329,7 @@ fn test_index(rope: &Rope) {
 
 #[cfg(test)]
 mod test {
+
     use Action::*;
 
     use crate::HeapVec;

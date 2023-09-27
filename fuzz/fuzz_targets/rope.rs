@@ -30,9 +30,8 @@ fuzz_target!(|data: Vec<Action>| {
                 truth.drain(pos..pos + len);
             }
         }
-
-        // rope.check();
     }
 
+    rope.check();
     assert_eq!(rope.to_string(), truth);
 });

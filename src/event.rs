@@ -1,27 +1,27 @@
 use crate::LeafIndex;
 
-/// The move event of an element.
+/// This event is fired when an element is created/deleted/spliced/merged.
 ///
 /// It's used to track the which leaf node an element is in.
 ///
-/// The delete events are not guaranteed to be called.  The events
-/// are missing when:
+/// The delete events are not guaranteed to be called.
+/// Deletion events are missing when:
 ///
 /// - The tree is dropped
-/// - Or, when draining a range, the elements from the start/end
-///   leaf node
+/// - Draining a range
 #[derive(Debug, Clone)]
-pub struct MoveEvent<'a, T> {
+pub struct ElemUpdateEvent<'a, T> {
     /// If this is None, it means the element is deleted from the tree
     pub target_leaf: Option<LeafIndex>,
     pub elem: &'a T,
 }
 
-/// This is a event listener for element move event.
+/// This is a event listener for element update event.
 /// It's used to track the which leaf node an element is in.
-pub type MoveListener<T> = Box<dyn Fn(MoveEvent<'_, T>) + Send + Sync>;
+pub type UpdateListener<T> = Box<dyn Fn(ElemUpdateEvent<'_, T>) + Send + Sync>;
 
-impl<'a, T> From<(LeafIndex, &'a T)> for MoveEvent<'a, T> {
+impl<'a, T> From<(LeafIndex, &'a T)> for ElemUpdateEvent<'a, T> {
+    #[inline]
     fn from(value: (LeafIndex, &'a T)) -> Self {
         Self {
             target_leaf: Some(value.0),
@@ -30,7 +30,8 @@ impl<'a, T> From<(LeafIndex, &'a T)> for MoveEvent<'a, T> {
     }
 }
 
-impl<'a, T> MoveEvent<'a, T> {
+impl<'a, T> ElemUpdateEvent<'a, T> {
+    #[inline(always)]
     pub fn new_del(elem: &'a T) -> Self {
         Self {
             target_leaf: None,
@@ -38,6 +39,7 @@ impl<'a, T> MoveEvent<'a, T> {
         }
     }
 
+    #[inline(always)]
     pub fn new_move(to_leaf: LeafIndex, elem: &'a T) -> Self {
         Self {
             target_leaf: Some(to_leaf),
@@ -45,6 +47,7 @@ impl<'a, T> MoveEvent<'a, T> {
         }
     }
 
+    #[inline(always)]
     pub fn is_deleted(&self) -> bool {
         self.target_leaf.is_none()
     }

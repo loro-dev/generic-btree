@@ -5,17 +5,14 @@ use core::{fmt::Debug, ops::Range};
 use std::{cmp::Ordering, mem::take, ops::RangeBounds};
 
 use fxhash::{FxHashMap, FxHashSet};
+pub use generic_impl::*;
 pub(crate) use heapless::Vec as HeaplessVec;
 use smallvec::SmallVec;
 use thunderdome::Arena;
 use thunderdome::Index as RawArenaIndex;
 
-pub use event::{MoveEvent, MoveListener};
-pub use generic_impl::*;
-
 use crate::rle::{HasLength, Mergeable, Sliceable};
 
-mod event;
 mod generic_impl;
 pub mod iter;
 
@@ -64,7 +61,6 @@ pub struct BTree<B: BTreeTrait> {
     // root is always internal nodes
     root: ArenaIndex,
     root_cache: B::Cache,
-    element_move_listener: Option<MoveListener<B::Elem>>,
 }
 
 impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
@@ -75,7 +71,6 @@ impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
             leaf_nodes: self.leaf_nodes.clone(),
             root: self.root,
             root_cache: self.root_cache.clone(),
-            element_move_listener: None,
         }
     }
 }
@@ -182,7 +177,6 @@ impl From<RawArenaIndex> for LeafIndex {
 ///
 /// - `start` is Some(start_offset) when it's first element of the given range.
 /// - `end` is Some(end_offset) when it's last element of the given range.
-#[derive(Debug)]
 pub struct ElemSlice<'a, Elem> {
     path: QueryResult,
     pub elem: &'a Elem,
@@ -228,12 +222,31 @@ impl<T: Sliceable> LeafNode<T> {
     }
 }
 
-// TODO: use enum to save spaces
 pub struct Node<B: BTreeTrait> {
     parent: Option<ArenaIndex>,
     parent_slot: u8,
     children: HeaplessVec<Child<B>, MAX_CHILDREN_NUM>,
     is_child_leaf: bool,
+}
+
+#[repr(transparent)]
+#[derive(Debug, Default, Clone)]
+pub struct SplittedLeaves {
+    pub arr: HeaplessVec<LeafIndex, 2>,
+}
+
+impl SplittedLeaves {
+    #[inline]
+    fn push_option(&mut self, leaf: Option<ArenaIndex>) {
+        if let Some(leaf) = leaf {
+            self.arr.push(leaf.unwrap().into()).unwrap();
+        }
+    }
+
+    #[inline]
+    fn push(&mut self, leaf: ArenaIndex) {
+        self.arr.push(leaf.unwrap().into()).unwrap();
+    }
 }
 
 impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for BTree<B> {
@@ -260,8 +273,8 @@ impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug
                         } else {
                             let node = tree.get_leaf(child.arena);
                             f.write_fmt(format_args!(
-                                "Leaf() Arena({:?}) Parent({:?}) Cache: {:?}\n",
-                                child.arena, node.parent, &child.cache
+                                "Leaf({:?}) Arena({:?}) Parent({:?}) Cache: {:?}\n",
+                                &node.elem, child.arena, node.parent, &child.cache
                             ))?;
                         }
                     }
@@ -386,6 +399,7 @@ impl<B: BTreeTrait> Node<B> {
         self.len() == 0
     }
 
+    #[inline(always)]
     pub fn has_leaves(&self) -> bool {
         self.is_child_leaf
     }
@@ -420,38 +434,26 @@ impl<B: BTreeTrait> BTree<B> {
             leaf_nodes: Arena::new(),
             root: ArenaIndex::Internal(root),
             root_cache: B::Cache::default(),
-            element_move_listener: None,
         }
     }
 
-    /// Register/Unregister an element move event listener.
-    ///
-    /// This is called when a element is moved from one leaf node to another.
-    /// It could happen when:
-    ///
-    /// - Leaf node split
-    /// - Leaf nodes merge
-    /// - Elements moving from one leaf node to another to keep the balance of the BTree
-    ///
-    /// It's useful when you try to track an element's position in the BTree.
-    #[inline]
-    pub fn set_listener(&mut self, listener: Option<MoveListener<B::Elem>>) {
-        self.element_move_listener = listener;
-    }
-
-    #[inline]
+    /// Get the number of nodes in the tree.
+    /// It includes all the internal nodes and the leaf nodes.
+    #[inline(always)]
     pub fn node_len(&self) -> usize {
-        self.in_nodes.len()
+        self.in_nodes.len() + self.leaf_nodes.len()
     }
 
+    /// Insert new element to the tree.
+    ///
+    /// Returns (insert_pos, splitted_leaves)
     #[inline]
-    pub fn insert<Q>(&mut self, tree_index: &Q::QueryArg, data: B::Elem)
+    pub fn insert<Q>(&mut self, q: &Q::QueryArg, data: B::Elem) -> (LeafIndex, SplittedLeaves)
     where
         Q: Query<B>,
     {
-        let Some(result) = self.query::<Q>(tree_index) else {
-            self.push(data);
-            return;
+        let Some(result) = self.query::<Q>(q) else {
+            return (self.push(data), Default::default());
         };
         let index = result.leaf;
         let leaf = self.leaf_nodes.get_mut(index.0).unwrap();
@@ -459,38 +461,37 @@ impl<B: BTreeTrait> BTree<B> {
         let cache_diff = B::new_cache_to_diff(&B::get_elem_cache(&data));
 
         let mut is_full = false;
+        let mut splitted: SplittedLeaves = Default::default();
         // Try to merge
-        if result.offset == 0 && data.can_merge(&leaf.elem) {
+        let ans = if result.offset == 0 && data.can_merge(&leaf.elem) {
             leaf.elem.merge_left(&data);
-            let leaf1 = Some(index);
-            if let Some(listener) = self.element_move_listener.as_ref() {
-                listener(MoveEvent {
-                    target_leaf: leaf1,
-                    elem: &data,
-                });
-            }
+            index
         } else if result.offset == leaf.elem.rle_len() && leaf.elem.can_merge(&data) {
             leaf.elem.merge_right(&data);
-            let leaf1 = Some(index);
-            if let Some(listener) = self.element_move_listener.as_ref() {
-                listener(MoveEvent {
-                    target_leaf: leaf1,
-                    elem: &data,
-                });
-            }
+            index
         } else {
             // Insert new leaf node
             let child = self.alloc_leaf_child(data, parent_idx.unwrap());
-            let (_, parent_index, insert_index) = self.split_leaf_if_needed(result);
+            let SplitInfo {
+                parent_idx: parent_index,
+                insert_slot: insert_index,
+                new_leaf,
+                ..
+            } = self.split_leaf_if_needed(result);
+            let ans = child.arena;
+            splitted.push_option(new_leaf);
             let parent = self.in_nodes.get_mut(parent_index).unwrap();
             parent.children.insert(insert_index, child).unwrap();
             is_full = parent.is_full();
-        }
+            ans.unwrap().into()
+        };
 
         self.recursive_update_cache(result.leaf.into(), B::USE_DIFF, Some(cache_diff));
         if is_full {
             self.split(parent_idx);
         }
+
+        (ans, splitted)
     }
 
     fn alloc_leaf_child(
@@ -512,20 +513,12 @@ impl<B: BTreeTrait> BTree<B> {
     /// Split a leaf node at offset if it's not the start/end of the leaf node.
     ///
     /// This method should be called when inserting at target pos.
-    ///
-    /// Returns new_pos, the parent node, the arena index of the parent node, and the insert pos in parent children.
-    ///
-    ///
-    fn split_leaf_if_needed(
-        &mut self,
-        pos: QueryResult,
-    ) -> (Option<QueryResult>, RawArenaIndex, usize) {
-        // TODO: this method should be extract into two methods, one for split, one for slot
-        // FIXME: notify leaf move
+    fn split_leaf_if_needed(&mut self, pos: QueryResult) -> SplitInfo {
         let leaf = self.leaf_nodes.get_mut(pos.leaf.0).unwrap();
         let parent_idx = leaf.parent;
         let parent = self.in_nodes.get_mut(leaf.parent).unwrap();
         let mut new_pos = Some(pos);
+        let mut rt_new_leaf = None;
         let leaf_slot = parent
             .children
             .iter()
@@ -558,16 +551,9 @@ impl<B: BTreeTrait> BTree<B> {
             // alloc new leaf node
             let leaf_arena_index = {
                 let arena_index = self.leaf_nodes.insert(new_leaf);
-                let leaf = self.leaf_nodes.get(arena_index).unwrap();
-                let elem = &leaf.elem;
-                if let Some(listener) = self.element_move_listener.as_ref() {
-                    listener(MoveEvent {
-                        target_leaf: Some(arena_index.into()),
-                        elem,
-                    });
-                }
                 ArenaIndex::Leaf(arena_index)
             };
+            rt_new_leaf = Some(leaf_arena_index);
             new_pos = Some(QueryResult {
                 leaf: leaf_arena_index.unwrap().into(),
                 offset: 0,
@@ -593,19 +579,17 @@ impl<B: BTreeTrait> BTree<B> {
             leaf_slot + 1
         };
 
-        (new_pos, parent_idx, insert_pos)
+        SplitInfo {
+            new_pos,
+            parent_idx,
+            insert_slot: insert_pos,
+            new_leaf: rt_new_leaf,
+        }
     }
 
+    #[inline]
     fn alloc_new_leaf(&mut self, leaf: LeafNode<B::Elem>) -> ArenaIndex {
         let arena_index = self.leaf_nodes.insert(leaf);
-        let leaf = self.leaf_nodes.get(arena_index).unwrap();
-        let elem = &leaf.elem;
-        if let Some(listener) = self.element_move_listener.as_ref() {
-            listener(MoveEvent {
-                target_leaf: Some(arena_index.into()),
-                elem,
-            });
-        }
         ArenaIndex::Leaf(arena_index)
     }
 
@@ -614,12 +598,24 @@ impl<B: BTreeTrait> BTree<B> {
     /// It will invoke [`BTreeTrait::insert_batch`]
     ///
     /// NOTE: Currently this method don't guarantee balance
-    pub fn insert_many_by_query_result(&mut self, result: QueryResult, data: Vec<B::Elem>)
+    pub fn insert_many_by_query_result(
+        &mut self,
+        result: QueryResult,
+        data: Vec<B::Elem>,
+    ) -> SplittedLeaves
     where
         B::Elem: Clone,
     {
         // FIXME: array overflow
-        let (_, parent_index, insert_index) = self.split_leaf_if_needed(result);
+        // TODO: returns path and splitted nodes
+        let SplitInfo {
+            parent_idx: parent_index,
+            insert_slot: insert_index,
+            new_leaf,
+            ..
+        } = self.split_leaf_if_needed(result);
+        let mut splitted = SplittedLeaves::default();
+        splitted.push_option(new_leaf);
         let parent = self.in_nodes.get_mut(parent_index).unwrap();
         let mut children = HeaplessVec::from_slice(&parent.children[..insert_index]).unwrap();
         for child in data.into_iter().map(|elem| {
@@ -647,6 +643,7 @@ impl<B: BTreeTrait> BTree<B> {
             self.split(ArenaIndex::Internal(parent_index));
         }
         // TODO: tree may still be unbalanced
+        splitted
     }
 
     /// Shift by offset 1.
@@ -760,6 +757,9 @@ impl<B: BTreeTrait> BTree<B> {
         self.leaf_nodes.get(leaf.0).map(|x| &x.elem)
     }
 
+    /// Remove leaf node from the tree
+    ///
+    /// If it's already removed, this method will return None
     pub fn remove_leaf(&mut self, path: QueryResult) -> Option<B::Elem> {
         let Some(leaf) = self.leaf_nodes.get_mut(path.leaf.0) else {
             return None;
@@ -772,12 +772,6 @@ impl<B: BTreeTrait> BTree<B> {
         let is_empty = parent.is_empty();
         debug_assert_eq!(child.arena.unwrap(), path.leaf.0);
         let elem = self.leaf_nodes.remove(child.arena.unwrap()).unwrap().elem;
-        if let Some(listener) = self.element_move_listener.as_ref() {
-            listener(MoveEvent {
-                target_leaf: None,
-                elem: &elem,
-            });
-        }
 
         self.recursive_update_cache(parent_idx, B::USE_DIFF, None);
         if is_empty {
@@ -822,14 +816,26 @@ impl<B: BTreeTrait> BTree<B> {
     /// have same `start` and `end` field
     ///
     /// TODO: need better test coverage
-    pub fn update<F>(&mut self, range: Range<QueryResult>, f: &mut F)
+    pub fn update<F>(&mut self, range: Range<QueryResult>, f: &mut F) -> SplittedLeaves
     where
         F: FnMut(&mut B::Elem) -> (bool, Option<B::CacheDiff>),
     {
+        let mut splitted = SplittedLeaves::default();
         let start = range.start;
-        let end = self.split_leaf_if_needed(range.end).0;
-        let Some(start) = self.split_leaf_if_needed(start).0 else {
-            return;
+        let SplitInfo {
+            new_pos: end,
+            new_leaf,
+            ..
+        } = self.split_leaf_if_needed(range.end);
+        splitted.push_option(new_leaf);
+        let SplitInfo {
+            new_pos: start,
+            new_leaf,
+            ..
+        } = self.split_leaf_if_needed(start);
+        splitted.push_option(new_leaf);
+        let Some(start) = start else {
+            return splitted;
         };
         let start_leaf = start.leaf;
         let mut path = self.get_path(start_leaf.into());
@@ -865,6 +871,8 @@ impl<B: BTreeTrait> BTree<B> {
                 .unwrap()
                 .calc_cache(&mut self.root_cache, None);
         }
+
+        splitted
     }
 
     /// Prefer begin of the next leaf node than end of the current leaf node
@@ -915,7 +923,7 @@ impl<B: BTreeTrait> BTree<B> {
     /// - If returned value is `None`, the cache will not be updated.
     /// - If leaf_node.rle_len() == 0, it will be removed from the tree.
     ///
-    /// Returns the path, if is is still valid after this method. (If the leaf node is removed, the path will be None)
+    /// Returns (path, splitted_leaves), if is is still valid after this method. (If the leaf node is removed, the path will be None)
     pub fn update_leaf_by_search<Q: Query<B>>(
         &mut self,
         q: &Q::QueryArg,
@@ -923,12 +931,12 @@ impl<B: BTreeTrait> BTree<B> {
             &mut B::Elem,
             QueryResult,
         ) -> Option<(B::CacheDiff, Option<B::Elem>, Option<B::Elem>)>,
-    ) -> Option<QueryResult> {
+    ) -> (Option<QueryResult>, SplittedLeaves) {
         if self.is_empty() {
             panic!("update_leaf_by_search called on empty tree");
         }
 
-        // FIXME: move elem listener
+        let mut splitted = SplittedLeaves::default();
         let mut finder = Q::init(q);
         let mut path = NodePath::default();
         let mut node_idx = self.root;
@@ -953,13 +961,14 @@ impl<B: BTreeTrait> BTree<B> {
             found,
         };
         let Some((diff, new_insert_1, new_insert_2)) = f(&mut leaf.elem, ans) else {
-            return Some(ans);
+            return (Some(ans), splitted);
         };
 
         if new_insert_2.is_some() {
             unimplemented!()
         }
 
+        // Delete
         if leaf.elem.rle_len() == 0 {
             // handle deletion
             // leaf node should be deleted
@@ -1004,15 +1013,15 @@ impl<B: BTreeTrait> BTree<B> {
                 }
             }
 
-            return None;
+            return (None, splitted);
         }
 
         let mut new_cache_and_child = None;
         if let Some(new_insert_1) = new_insert_1 {
-            new_cache_and_child = Some((
-                B::get_elem_cache(&leaf.elem),
-                self.alloc_leaf_child(new_insert_1, path.last().unwrap().arena.unwrap()),
-            ));
+            let cache = B::get_elem_cache(&leaf.elem);
+            let child = self.alloc_leaf_child(new_insert_1, path.last().unwrap().arena.unwrap());
+            splitted.push(child.arena);
+            new_cache_and_child = Some((cache, child));
         }
 
         while let Some(Idx {
@@ -1048,7 +1057,7 @@ impl<B: BTreeTrait> BTree<B> {
             B::apply_cache_diff(&mut self.root_cache, &diff);
         }
 
-        Some(ans)
+        (Some(ans), splitted)
     }
 
     /// Update leaf node's elements, return true if cache need to be updated
@@ -1062,7 +1071,8 @@ impl<B: BTreeTrait> BTree<B> {
         &mut self,
         node_idx: LeafIndex,
         f: impl FnOnce(&mut B::Elem) -> (bool, Option<B::CacheDiff>, Option<B::Elem>, Option<B::Elem>),
-    ) -> bool {
+    ) -> (bool, SplittedLeaves) {
+        let mut splitted = SplittedLeaves::default();
         let node = self.leaf_nodes.get_mut(node_idx.0).unwrap();
         let parent_idx = node.parent();
         let (need_update_cache, diff, new_insert_1, new_insert_2) = f(&mut node.elem);
@@ -1072,13 +1082,10 @@ impl<B: BTreeTrait> BTree<B> {
             self.recursive_update_cache(node_idx.into(), B::USE_DIFF, diff);
         }
 
-        if new_insert_1.is_none() {
-            return true;
-        }
-
         if deleted {
-            assert!(new_insert_1.is_none());
-            assert!(new_insert_2.is_none());
+            debug_assert!(new_insert_1.is_none());
+            debug_assert!(new_insert_2.is_none());
+            self.leaf_nodes.remove(node_idx.0).unwrap();
             let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
             let slot = Self::get_leaf_slot(node_idx.0, parent);
             parent.children.remove(slot);
@@ -1087,7 +1094,10 @@ impl<B: BTreeTrait> BTree<B> {
                 self.handle_lack(parent_idx);
             }
 
-            false
+            (false, splitted)
+        } else if new_insert_1.is_none() {
+            debug_assert!(new_insert_2.is_none());
+            return (true, splitted);
         } else {
             let new: HeaplessVec<_, 2> = new_insert_1
                 .into_iter()
@@ -1097,6 +1107,7 @@ impl<B: BTreeTrait> BTree<B> {
             let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
             let slot = Self::get_leaf_slot(node_idx.0, parent);
             for (i, v) in new.into_iter().enumerate() {
+                splitted.push(v.arena);
                 parent.children.insert(slot + 1 + i, v).unwrap();
             }
             let is_full = parent.is_full();
@@ -1104,7 +1115,7 @@ impl<B: BTreeTrait> BTree<B> {
                 self.split(parent_idx);
             }
 
-            true
+            (true, splitted)
         }
     }
 
@@ -1282,7 +1293,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn range<Q>(&self, range: Range<Q::QueryArg>) -> Option<Range<QueryResult>>
     where
         Q: Query<B>,
@@ -1294,6 +1305,7 @@ impl<B: BTreeTrait> BTree<B> {
         Some(self.query::<Q>(&range.start).unwrap()..self.query::<Q>(&range.end).unwrap())
     }
 
+    #[inline]
     pub fn iter_range(
         &self,
         range: impl RangeBounds<QueryResult>,
@@ -1344,6 +1356,7 @@ impl<B: BTreeTrait> BTree<B> {
         })
     }
 
+    #[inline(always)]
     pub fn first_full_path(&self) -> QueryResult {
         QueryResult {
             leaf: self.first_leaf().unwrap_leaf().into(),
@@ -1352,6 +1365,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
+    #[inline(always)]
     pub fn last_full_path(&self) -> QueryResult {
         let leaf = self.last_leaf();
         QueryResult {
@@ -1361,8 +1375,11 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
+    /// Split the internal node at path into two nodes.
+    ///
     // at call site the cache at path can be out-of-date.
     // the cache will be up-to-date after this method
+    #[inline(always)]
     fn split(&mut self, node_idx: ArenaIndex) {
         let (node_parent, node_parent_slot, this_cache, right_child) = self.split_node(node_idx);
 
@@ -1839,11 +1856,7 @@ impl<B: BTreeTrait> BTree<B> {
         let mut stack: SmallVec<[_; 64]> = smallvec::smallvec![index];
         while let Some(x) = stack.pop() {
             if let ArenaIndex::Leaf(index) = x {
-                if let Some(leaf) = self.leaf_nodes.remove(index) {
-                    if let Some(listener) = &mut self.element_move_listener {
-                        listener(MoveEvent::new_del(&leaf.elem));
-                    }
-                }
+                self.leaf_nodes.remove(index);
 
                 continue;
             }
@@ -2059,20 +2072,24 @@ impl<B: BTreeTrait> BTree<B> {
         Some(path)
     }
 
+    #[inline(always)]
     pub fn root_cache(&self) -> &B::Cache {
         &self.root_cache
     }
 
     /// This method will release the memory back to OS.
     /// Currently, it's just `*self = Self::new()`
+    #[inline(always)]
     pub fn clear(&mut self) {
         *self = Self::new();
     }
 
+    #[inline(always)]
     fn root_mut(&mut self) -> &mut Node<B> {
         self.get_internal_mut(self.root)
     }
 
+    #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.get_internal(self.root).is_empty()
     }
@@ -2102,15 +2119,16 @@ impl<B: BTreeTrait> BTree<B> {
         path
     }
 
-    pub fn push(&mut self, elem: B::Elem) {
-        // FIXME: Move event
+    pub fn push(&mut self, elem: B::Elem) -> LeafIndex {
         let mut is_full = false;
         let mut parent_idx = self.root;
         let mut update_cache_idx = parent_idx;
-        if self.is_empty() {
+        let ans = if self.is_empty() {
             let data = self.alloc_leaf_child(elem, parent_idx.unwrap());
             let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
+            let ans = data.arena;
             parent.children.push(data).unwrap();
+            ans.unwrap().into()
         } else {
             let leaf_idx = self.last_leaf();
             update_cache_idx = leaf_idx;
@@ -2118,52 +2136,49 @@ impl<B: BTreeTrait> BTree<B> {
             parent_idx = leaf.parent();
             if leaf.elem.can_merge(&elem) {
                 leaf.elem.merge_right(&elem);
-                if let Some(listener) = self.element_move_listener.as_ref() {
-                    listener(MoveEvent {
-                        target_leaf: Some(leaf_idx.unwrap_leaf().into()),
-                        elem: &elem,
-                    });
-                }
+                leaf_idx.unwrap().into()
             } else {
                 let data = self.alloc_leaf_child(elem, parent_idx.unwrap());
                 let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
+                let ans = data.arena;
                 parent.children.push(data).unwrap();
                 is_full = parent.is_full();
+                ans.unwrap().into()
             }
-        }
+        };
 
         self.recursive_update_cache(update_cache_idx, B::USE_DIFF, None);
         if is_full {
             self.split(parent_idx);
         }
+
+        ans
     }
 
-    pub fn prepend(&mut self, elem: B::Elem) {
-        // FIXME: Call move listener
+    pub fn prepend(&mut self, elem: B::Elem) -> LeafIndex {
         let leaf_idx = self.first_leaf();
         let leaf = self.leaf_nodes.get_mut(leaf_idx.unwrap_leaf()).unwrap();
+        let parent_idx = leaf.parent();
         let mut is_full = false;
-        if elem.can_merge(&leaf.elem) {
+        let ans = if elem.can_merge(&leaf.elem) {
             leaf.elem.merge_left(&elem);
-            let leaf1 = Some(leaf_idx.unwrap_leaf().into());
-            if let Some(listener) = self.element_move_listener.as_ref() {
-                listener(MoveEvent {
-                    target_leaf: leaf1,
-                    elem: &elem,
-                });
-            }
+            leaf_idx.unwrap().into()
         } else {
             let parent_idx = leaf.parent;
             let data = self.alloc_leaf_child(elem, parent_idx);
             let parent = self.in_nodes.get_mut(parent_idx).unwrap();
+            let ans = data.arena;
             parent.children.push(data).unwrap();
             is_full = parent.is_full();
-        }
+            ans.unwrap().into()
+        };
 
         self.recursive_update_cache(leaf_idx, B::USE_DIFF, None);
         if is_full {
-            self.split(leaf_idx);
+            self.split(parent_idx);
         }
+
+        ans
     }
 
     /// compare the position of a and b
@@ -2339,7 +2354,15 @@ impl<B: BTreeTrait> BTree<B> {
     }
 }
 
+struct SplitInfo {
+    new_pos: Option<QueryResult>,
+    parent_idx: RawArenaIndex,
+    insert_slot: usize,
+    new_leaf: Option<ArenaIndex>,
+}
+
 impl<B: BTreeTrait> Default for BTree<B> {
+    #[inline(always)]
     fn default() -> Self {
         Self::new()
     }
