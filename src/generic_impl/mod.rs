@@ -1,3 +1,4 @@
+mod gap_buffer;
 mod len_finder;
 mod ord;
 mod rope;
