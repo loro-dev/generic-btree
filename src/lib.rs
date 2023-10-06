@@ -2,6 +2,8 @@
 #![forbid(unsafe_code)]
 
 use core::{fmt::Debug, ops::Range};
+use std::collections::VecDeque;
+use std::ops::AddAssign;
 use std::{cmp::Ordering, mem::take, ops::RangeBounds};
 
 use fxhash::{FxHashMap, FxHashSet};
@@ -63,7 +65,7 @@ pub struct BTree<B: BTreeTrait> {
     root_cache: B::Cache,
 }
 
-impl<Elem: Clone, B: BTreeTrait<Elem=Elem>> Clone for BTree<B> {
+impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
     #[inline]
     fn clone(&self) -> Self {
         Self {
@@ -203,7 +205,7 @@ impl<'a, Elem> ElemSlice<'a, Elem> {
 }
 
 impl QueryResult {
-    pub fn elem<'b, Elem: Debug, B: BTreeTrait<Elem=Elem>>(
+    pub fn elem<'b, Elem: Debug, B: BTreeTrait<Elem = Elem>>(
         &self,
         tree: &'b BTree<B>,
     ) -> Option<&'b Elem> {
@@ -243,8 +245,12 @@ pub struct LeafNode<Elem> {
 }
 
 impl<T> LeafNode<T> {
-    fn parent(&self) -> ArenaIndex {
+    pub fn parent(&self) -> ArenaIndex {
         ArenaIndex::Internal(self.parent)
+    }
+
+    pub fn elem(&self) -> &T {
+        &self.elem
     }
 }
 
@@ -285,9 +291,9 @@ impl SplittedLeaves {
     }
 }
 
-impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem, Cache=Cache>> Debug for BTree<B> {
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for BTree<B> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        fn fmt_node<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem>>(
+        fn fmt_node<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem>>(
             tree: &BTree<B>,
             node_idx: ArenaIndex,
             f: &mut core::fmt::Formatter<'_>,
@@ -337,7 +343,7 @@ impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem, Cache=Cache>> Debug for
     }
 }
 
-impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem, Cache=Cache>> Debug for Node<B> {
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for Node<B> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Node")
             .field("children", &self.children)
@@ -345,7 +351,7 @@ impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem, Cache=Cache>> Debug for
     }
 }
 
-impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem, Cache=Cache>> Debug for Child<B> {
+impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem = Elem, Cache = Cache>> Debug for Child<B> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Child")
             .field("index", &self.arena)
@@ -354,7 +360,7 @@ impl<Cache: Debug, Elem: Debug, B: BTreeTrait<Elem=Elem, Cache=Cache>> Debug for
     }
 }
 
-impl<Elem: Clone, B: BTreeTrait<Elem=Elem>> Clone for Node<B> {
+impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for Node<B> {
     fn clone(&self) -> Self {
         Self {
             parent: self.parent,
@@ -453,7 +459,7 @@ impl<B: BTreeTrait> Node<B> {
     }
 }
 
-type LeafDirtyMap<Diff> = FxHashMap<ArenaIndex, Option<Diff>>;
+type LeafDirtyMap<Diff> = FxHashMap<ArenaIndex, Diff>;
 
 /// Whether the parent node is lack of children
 #[repr(transparent)]
@@ -487,8 +493,8 @@ impl<B: BTreeTrait> BTree<B> {
     /// Returns (insert_pos, splitted_leaves)
     #[inline]
     pub fn insert<Q>(&mut self, q: &Q::QueryArg, data: B::Elem) -> (LeafIndex, SplittedLeaves)
-        where
-            Q: Query<B>,
+    where
+        Q: Query<B>,
     {
         let Some(result) = self.query::<Q>(q) else {
             return (self.push(data), Default::default());
@@ -644,8 +650,8 @@ impl<B: BTreeTrait> BTree<B> {
         cursor: Option<Cursor>,
         data: Vec<B::Elem>,
     ) -> SplittedLeaves
-        where
-            B::Elem: Clone,
+    where
+        B::Elem: Clone,
     {
         if cursor.is_none() {
             assert!(self.is_empty());
@@ -715,33 +721,32 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// It will not stay on empty spans but scan forward
     pub fn shift_path_by_one_offset(&self, mut path: Cursor) -> Option<Cursor>
-        where
-            B::Elem: rle::HasLength,
+    where
+        B::Elem: rle::HasLength,
     {
         let leaf = self.leaf_nodes.get(path.leaf.0).unwrap();
-        let mut parent_index = leaf.parent;
+        let mut parent_idx = leaf.parent;
         let mut parent = self.in_nodes.get(leaf.parent).unwrap();
-        let mut elem_index = Self::get_leaf_slot(path.leaf.0, parent);
+        let mut elem_slot_index = Self::get_leaf_slot(path.leaf.0, parent);
         path.offset += 1;
         loop {
-            if elem_index == parent.children.len() {
-                if let Some(next) = self.next_same_level_in_node(ArenaIndex::Internal(parent_index))
-                {
-                    elem_index = 0;
+            if elem_slot_index == parent.children.len() {
+                if let Some(next) = self.next_same_level_in_node(ArenaIndex::Internal(parent_idx)) {
+                    elem_slot_index = 0;
                     path.offset = 0;
-                    parent_index = next.unwrap_internal();
-                    parent = self.in_nodes.get(parent_index).unwrap();
+                    parent_idx = next.unwrap_internal();
+                    parent = self.in_nodes.get(parent_idx).unwrap();
                 } else {
                     return None;
                 }
             }
 
-            let elem = &parent.children[elem_index];
+            let elem = &parent.children[elem_slot_index];
             let leaf = self.leaf_nodes.get(elem.arena.unwrap()).unwrap();
             // skip empty span
             if leaf.elem.rle_len() <= path.offset {
                 path.offset -= leaf.elem.rle_len();
-                elem_index += 1;
+                elem_slot_index += 1;
             } else {
                 path.leaf = elem.arena.unwrap_leaf().into();
                 break;
@@ -765,15 +770,15 @@ impl<B: BTreeTrait> BTree<B> {
     /// Return None if the tree is empty
     #[inline(always)]
     pub fn query<Q>(&self, query: &Q::QueryArg) -> Option<QueryResult>
-        where
-            Q: Query<B>,
+    where
+        Q: Query<B>,
     {
         self.query_with_finder_return::<Q>(query).0
     }
 
     pub fn query_with_finder_return<Q>(&self, query: &Q::QueryArg) -> (Option<QueryResult>, Q)
-        where
-            Q: Query<B>,
+    where
+        Q: Query<B>,
     {
         let mut finder = Q::init(query);
         if self.is_empty() {
@@ -873,17 +878,20 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    /// Update the elements in place
+    /// Update the elements in place.
     ///
-    /// F should returns `(should_update_cache, cache_diff)`
+    /// If the range.start or range.end is in the middle of a leaf node, the leaf node
+    /// will be splitted into two leaf nodes. The new leaf nodes will be returned.
+    ///
+    /// F should returns `Some(cache_diff)` if cache needs to be updated. Otherwise, returns None.
     ///
     /// If the given range has zero length, f will still be called, and the slice will
     /// have same `start` and `end` field
     ///
     /// TODO: need better test coverage
     pub fn update<F>(&mut self, range: Range<Cursor>, f: &mut F) -> SplittedLeaves
-        where
-            F: FnMut(&mut B::Elem) -> (bool, Option<B::CacheDiff>),
+    where
+        F: FnMut(&mut B::Elem) -> Option<B::CacheDiff>,
     {
         let mut splitted = SplittedLeaves::default();
         let start = range.start;
@@ -918,9 +926,9 @@ impl<B: BTreeTrait> BTree<B> {
                 .leaf_nodes
                 .get_mut(current_leaf.arena.unwrap_leaf())
                 .unwrap();
-            let (should_update_cache, cache_diff) = f(&mut node.elem);
-            if should_update_cache {
-                add_leaf_dirty_map(current_leaf.arena, &mut dirty_map, cache_diff);
+            let cache_diff = f(&mut node.elem);
+            if let Some(diff) = cache_diff {
+                add_leaf_dirty_map(current_leaf.arena, &mut dirty_map, diff);
             }
 
             if !self.next_sibling(&mut path) {
@@ -1010,7 +1018,7 @@ impl<B: BTreeTrait> BTree<B> {
                 arena: ArenaIndex::Internal(node_idx_inner),
                 arr: child_arr_pos,
             })
-                .unwrap();
+            .unwrap();
             let node = self.in_nodes.get(node_idx_inner).unwrap();
             let result = finder.find_node(q, &node.children);
             child_arr_pos = result.index;
@@ -1047,9 +1055,9 @@ impl<B: BTreeTrait> BTree<B> {
 
             // iterate from leaf to root, child to parent
             while let Some(Idx {
-                               arena: parent_idx,
-                               arr: parent_arr_pos,
-                           }) = path.pop()
+                arena: parent_idx,
+                arr: parent_arr_pos,
+            }) = path.pop()
             {
                 let parent = self.get_internal_mut(parent_idx);
                 if is_first {
@@ -1091,9 +1099,9 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         while let Some(Idx {
-                           arena: parent_idx,
-                           arr: parent_arr_pos,
-                       }) = path.pop()
+            arena: parent_idx,
+            arr: parent_arr_pos,
+        }) = path.pop()
         {
             let parent = self.get_internal_mut(parent_idx);
             match take(&mut new_cache_and_child) {
@@ -1193,26 +1201,40 @@ impl<B: BTreeTrait> BTree<B> {
             .calc_cache(&mut self.root_cache, None);
     }
 
-    fn update_dirty_cache_map(&mut self, mut dirty_map: LeafDirtyMap<B::CacheDiff>) {
-        // Sort by level. Now order is from leaf to root
-        let mut diff_map: FxHashMap<ArenaIndex, B::CacheDiff> = FxHashMap::default();
-        for (idx, diff) in dirty_map.iter_mut() {
-            if let Some(diff) = take(diff) {
-                diff_map.insert(*idx, diff);
-            }
-        }
-        let mut visit_set: FxHashSet<ArenaIndex> = dirty_map.keys().copied().collect();
+    fn update_dirty_cache_map(&mut self, mut diff_map: LeafDirtyMap<B::CacheDiff>) {
+        // diff_map only contains leaf nodes when this function is called
+        let mut visit_set: FxHashSet<ArenaIndex> = diff_map.keys().copied().collect();
         while !visit_set.is_empty() {
             for child_idx in take(&mut visit_set) {
-                let node = self.in_nodes.get(child_idx.unwrap_internal()).unwrap();
-                let Some(parent_idx) = node.parent else {
-                    continue;
+                let (parent_idx, cache_diff) = match child_idx {
+                    ArenaIndex::Leaf(leaf_idx) => {
+                        let node = self.leaf_nodes.get(leaf_idx).unwrap();
+                        let parent_idx = node.parent;
+                        let parent = self.in_nodes.get_mut(parent_idx).unwrap();
+                        let cache_diff = diff_map.remove(&child_idx).unwrap();
+                        for child in parent.children.iter_mut() {
+                            if child.arena == child_idx {
+                                B::apply_cache_diff(&mut child.cache, &cache_diff);
+                                break;
+                            }
+                        }
+
+                        (ArenaIndex::Internal(parent_idx), cache_diff)
+                    }
+                    ArenaIndex::Internal(_) => {
+                        let node = self.in_nodes.get(child_idx.unwrap_internal()).unwrap();
+                        let Some(parent_idx) = node.parent else {
+                            continue;
+                        };
+                        let (child, parent) = self.get2_mut(child_idx, parent_idx);
+                        let cache_diff = child.calc_cache(
+                            &mut parent.children[child.parent_slot as usize].cache,
+                            diff_map.remove(&child_idx),
+                        );
+
+                        (parent_idx, cache_diff)
+                    }
                 };
-                let (child, parent) = self.get2_mut(child_idx, parent_idx);
-                let cache_diff = child.calc_cache(
-                    &mut parent.children[child.parent_slot as usize].cache,
-                    diff_map.remove(&child_idx),
-                );
 
                 visit_set.insert(parent_idx);
                 if let Some(e) = diff_map.get_mut(&parent_idx) {
@@ -1248,7 +1270,7 @@ impl<B: BTreeTrait> BTree<B> {
         node.children = children;
     }
 
-    pub fn iter(&self) -> impl Iterator<Item=&B::Elem> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = &B::Elem> + '_ {
         let mut path = self.first_path().unwrap_or_default();
         path.pop();
         let idx = path.last().copied().unwrap_or(Idx::new(self.root, 0));
@@ -1373,8 +1395,8 @@ impl<B: BTreeTrait> BTree<B> {
 
     #[inline(always)]
     pub fn range<Q>(&self, range: Range<Q::QueryArg>) -> Option<Range<QueryResult>>
-        where
-            Q: Query<B>,
+    where
+        Q: Query<B>,
     {
         if self.is_empty() {
             return None;
@@ -1387,33 +1409,38 @@ impl<B: BTreeTrait> BTree<B> {
     pub fn iter_range(
         &self,
         range: impl RangeBounds<Cursor>,
-    ) -> impl Iterator<Item=ElemSlice<'_, B::Elem>> + '_ {
+    ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
         let start = match range.start_bound() {
             std::ops::Bound::Included(start) => *start,
             std::ops::Bound::Excluded(_) => unreachable!(),
-            std::ops::Bound::Unbounded => self.first_full_path(),
+            std::ops::Bound::Unbounded => self.start_cursor(),
         };
-        let end = match range.end_bound() {
-            std::ops::Bound::Included(end) => *end,
-            std::ops::Bound::Excluded(end) => *end,
-            std::ops::Bound::Unbounded => self.last_full_path(),
+        let (inclusive, end) = match range.end_bound() {
+            std::ops::Bound::Included(end) => (true, *end),
+            std::ops::Bound::Excluded(end) => (false, *end),
+            std::ops::Bound::Unbounded => (true, self.end_cursor()),
         };
-        self._iter_range(start, end)
+        self._iter_range(start, end, inclusive)
     }
 
     fn _iter_range(
         &self,
         start: Cursor,
         end: Cursor,
-    ) -> impl Iterator<Item=ElemSlice<'_, B::Elem>> + '_ {
+        inclusive_end: bool,
+    ) -> impl Iterator<Item = ElemSlice<'_, B::Elem>> + '_ {
         let node_iter = iter::Iter::new(
             self,
             self.get_path(start.leaf.into()),
             self.get_path(end.leaf.into()),
         );
-        node_iter.map(move |(path, node)| {
+        node_iter.filter_map(move |(path, node)| {
             let leaf = LeafIndex(path.last().unwrap().arena.unwrap_leaf());
-            ElemSlice {
+            if end.leaf == leaf && !inclusive_end {
+                return None;
+            }
+
+            Some(ElemSlice {
                 cursor: Cursor { leaf, offset: 0 },
                 elem: &node.elem,
                 start: if start.leaf == leaf {
@@ -1426,12 +1453,12 @@ impl<B: BTreeTrait> BTree<B> {
                 } else {
                     None
                 },
-            }
+            })
         })
     }
 
     #[inline(always)]
-    pub fn first_full_path(&self) -> Cursor {
+    pub fn start_cursor(&self) -> Cursor {
         Cursor {
             leaf: self.first_leaf().unwrap_leaf().into(),
             offset: 0,
@@ -1439,7 +1466,7 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     #[inline(always)]
-    pub fn last_full_path(&self) -> Cursor {
+    pub fn end_cursor(&self) -> Cursor {
         let leaf = self.last_leaf();
         let node = self.get_leaf(leaf);
         Cursor {
@@ -1668,7 +1695,7 @@ impl<B: BTreeTrait> BTree<B> {
         let node = self.get_internal(node_idx);
         let parent_idx = node.parent.unwrap();
         let parent = self.get_internal(parent_idx);
-        debug_assert_eq!(parent.children[node.parent_slot as usize].arena, node_idx, );
+        debug_assert_eq!(parent.children[node.parent_slot as usize].arena, node_idx,);
         let ans = match self.pair_neighbor(node_idx) {
             Some((a_idx, b_idx)) => {
                 let parent = self.get_internal_mut(parent_idx);
@@ -2301,8 +2328,8 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// f: (node_cache, previous_sibling_elem, (this_elem, offset))
     pub fn visit_previous_caches<F>(&self, cursor: Cursor, mut f: F)
-        where
-            F: FnMut(PreviousCache<'_, B>),
+    where
+        F: FnMut(PreviousCache<'_, B>),
     {
         // the last index of path points to the leaf element
         let path = self.get_path(cursor.leaf.into());
@@ -2348,6 +2375,66 @@ impl<B: BTreeTrait> BTree<B> {
         }
         dbg!(size_counter);
     }
+
+    /// Iterate over the leaf elements in the tree if the filter returns true for all its ancestors' caches, including its own cache.
+    pub fn iter_with_filter<'a, R: Default + Copy + AddAssign + 'a>(
+        &'a self,
+        mut f: impl FnMut(&B::Cache) -> (bool, R) + 'a,
+    ) -> impl Iterator<Item = (R, &'_ B::Elem)> + '_ {
+        let mut queue = VecDeque::new();
+        queue.push_back((self.root, R::default()));
+        std::iter::from_fn(move || {
+            while let Some((node_idx, mut r)) = queue.pop_front() {
+                match node_idx {
+                    ArenaIndex::Leaf(leaf) => {
+                        let node = self.leaf_nodes.get(leaf).unwrap();
+                        return Some((r, &node.elem));
+                    }
+                    ArenaIndex::Internal(idx) => {
+                        let node = self.in_nodes.get(idx).unwrap();
+                        for child in node.children.iter() {
+                            let (drill, new_r) = f(&child.cache);
+                            if drill {
+                                queue.push_back((child.arena, r));
+                            }
+                            r += new_r;
+                        }
+                    }
+                }
+            }
+
+            None
+        })
+    }
+
+    /// This method allows users to update the caches and the elements with a filter.
+    ///
+    /// If `f` returns true for a node, it will drill down into the subtree whose root is the node.
+    ///
+    /// It's the caller's responsibility to ensure the invariance of caches being up to date.
+    pub fn update_cache_and_elem_with_filter<'a>(
+        &'a mut self,
+        mut f: impl FnMut(&mut B::Cache) -> bool + 'a,
+        mut g: impl FnMut(&mut B::Elem) + 'a,
+    ) {
+        let mut stack = vec![self.root];
+        while let Some(node_idx) = stack.pop() {
+            match node_idx {
+                ArenaIndex::Leaf(leaf) => {
+                    let node = self.leaf_nodes.get_mut(leaf).unwrap();
+                    g(&mut node.elem);
+                }
+                ArenaIndex::Internal(idx) => {
+                    let node = self.in_nodes.get_mut(idx).unwrap();
+                    for child in node.children.iter_mut() {
+                        if f(&mut child.cache) {
+                            stack.push(child.arena);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub enum PreviousCache<'a, B: BTreeTrait> {
@@ -2357,7 +2444,7 @@ pub enum PreviousCache<'a, B: BTreeTrait> {
 }
 
 #[inline(always)]
-fn add_leaf_dirty_map<T>(leaf: ArenaIndex, dirty_map: &mut LeafDirtyMap<T>, leaf_diff: Option<T>) {
+fn add_leaf_dirty_map<T>(leaf: ArenaIndex, dirty_map: &mut LeafDirtyMap<T>, leaf_diff: T) {
     dirty_map.insert(leaf, leaf_diff);
 }
 

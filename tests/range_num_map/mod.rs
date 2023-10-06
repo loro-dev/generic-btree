@@ -28,7 +28,7 @@ impl RangeNumMap {
             self.0
                 .update(range.start.cursor..range.end.cursor, &mut |slice| {
                     slice.value = Some(value);
-                    (false, None)
+                    None
                 });
         } else {
             assert_eq!(range.start, 0);
@@ -71,7 +71,7 @@ impl RangeNumMap {
                         *v += change;
                     }
 
-                    (false, None)
+                    None
                 });
         }
     }

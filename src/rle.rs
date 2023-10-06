@@ -23,7 +23,9 @@ pub trait Sliceable: HasLength + Sized {
 
         self._slice(start..end)
     }
+
     /// slice in-place
+    #[inline(always)]
     fn slice_(&mut self, range: impl RangeBounds<usize>) {
         *self = self.slice(range);
     }
@@ -33,6 +35,59 @@ pub trait Sliceable: HasLength + Sized {
         let right = self.slice(pos..);
         self.slice_(..pos);
         right
+    }
+
+    /// Update the slice in the given range.
+    /// This method may split `self` into two or three parts.
+    /// If so, it will make `self` the leftmost part and return the next split parts.
+    ///
+    /// # Example
+    ///
+    /// If `self.rle_len() == 10`, `self.update(1..5)` will split self into three parts and update the middle part.
+    /// It returns the middle and the right part.
+    fn update_with_split(
+        &mut self,
+        range: impl RangeBounds<usize>,
+        f: impl FnOnce(&mut Self),
+    ) -> (Option<Self>, Option<Self>) {
+        let start = match range.start_bound() {
+            std::ops::Bound::Included(x) => *x,
+            std::ops::Bound::Excluded(x) => x + 1,
+            std::ops::Bound::Unbounded => 0,
+        };
+
+        let end = match range.end_bound() {
+            std::ops::Bound::Included(x) => x + 1,
+            std::ops::Bound::Excluded(x) => *x,
+            std::ops::Bound::Unbounded => self.rle_len(),
+        };
+
+        if start == end {
+            return (None, None);
+        }
+
+        match (start == 0, end == self.rle_len()) {
+            (true, true) => {
+                f(self);
+                (None, None)
+            }
+            (true, false) => {
+                let right = self.split(end);
+                f(self);
+                (Some(right), None)
+            }
+            (false, true) => {
+                let mut right = self.split(start);
+                f(&mut right);
+                (Some(right), None)
+            }
+            (false, false) => {
+                let right = self.split(end);
+                let mut middle = self.split(start);
+                f(&mut middle);
+                (Some(middle), Some(right))
+            }
+        }
     }
 }
 
