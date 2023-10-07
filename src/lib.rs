@@ -2,12 +2,13 @@
 #![forbid(unsafe_code)]
 
 use core::{fmt::Debug, ops::Range};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::ops::AddAssign;
 use std::{cmp::Ordering, mem::take, ops::RangeBounds};
 
 use fxhash::{FxHashMap, FxHashSet};
 pub(crate) use heapless::Vec as HeaplessVec;
+use itertools::Itertools;
 use smallvec::SmallVec;
 use thunderdome::Arena;
 use thunderdome::Index as RawArenaIndex;
@@ -39,6 +40,7 @@ pub trait BTreeTrait {
     fn merge_cache_diff(diff1: &mut Self::CacheDiff, diff2: &Self::CacheDiff);
     fn get_elem_cache(elem: &Self::Elem) -> Self::Cache;
     fn new_cache_to_diff(cache: &Self::Cache) -> Self::CacheDiff;
+    fn sub_cache(cache_lhs: &Self::Cache, cache_rhs: &Self::Cache) -> Self::CacheDiff;
 }
 
 pub trait Query<B: BTreeTrait> {
@@ -118,7 +120,7 @@ impl Idx {
 
 type NodePath = HeaplessVec<Idx, 8>;
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
 pub struct Cursor {
     pub leaf: LeafIndex,
     pub offset: usize,
@@ -136,7 +138,7 @@ pub struct QueryResult {
 ///
 ///
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct LeafIndex(RawArenaIndex);
 
 impl LeafIndex {
@@ -503,30 +505,31 @@ impl<B: BTreeTrait> BTree<B> {
         self.insert_by_path(result.cursor, data)
     }
 
-    pub fn insert_by_path(&mut self, result: Cursor, data: B::Elem) -> (LeafIndex, SplittedLeaves) {
-        let index = result.leaf;
+    pub fn insert_by_path(&mut self, cursor: Cursor, data: B::Elem) -> (LeafIndex, SplittedLeaves) {
+        let index = cursor.leaf;
         let leaf = self.leaf_nodes.get_mut(index.0).unwrap();
-        let parent_idx = leaf.parent();
+        let mut parent_idx = leaf.parent();
         let cache_diff = B::new_cache_to_diff(&B::get_elem_cache(&data));
 
         let mut is_full = false;
         let mut splitted: SplittedLeaves = Default::default();
         // Try to merge
-        let ans = if result.offset == 0 && data.can_merge(&leaf.elem) {
+        let ans = if cursor.offset == 0 && data.can_merge(&leaf.elem) {
             leaf.elem.merge_left(&data);
             index
-        } else if result.offset == leaf.elem.rle_len() && leaf.elem.can_merge(&data) {
+        } else if cursor.offset == leaf.elem.rle_len() && leaf.elem.can_merge(&data) {
             leaf.elem.merge_right(&data);
             index
         } else {
             // Insert new leaf node
-            let child = self.alloc_leaf_child(data, parent_idx.unwrap());
             let SplitInfo {
                 parent_idx: parent_index,
                 insert_slot: insert_index,
                 new_leaf,
                 ..
-            } = self.split_leaf_if_needed(result);
+            } = self.split_leaf_if_needed(cursor);
+            parent_idx = ArenaIndex::Internal(parent_index);
+            let child = self.alloc_leaf_child(data, parent_index);
             let ans = child.arena;
             splitted.push_option(new_leaf);
             let parent = self.in_nodes.get_mut(parent_index).unwrap();
@@ -535,7 +538,7 @@ impl<B: BTreeTrait> BTree<B> {
             ans.unwrap().into()
         };
 
-        self.recursive_update_cache(result.leaf.into(), B::USE_DIFF, Some(cache_diff));
+        self.recursive_update_cache(cursor.leaf.into(), B::USE_DIFF, Some(cache_diff));
         if is_full {
             self.split(parent_idx);
         }
@@ -593,6 +596,13 @@ impl<B: BTreeTrait> BTree<B> {
                 pos.offset,
                 &leaf.elem
             );
+
+            if parent.children.len() + 1 >= MAX_CHILDREN_NUM {
+                self.split(ArenaIndex::Internal(parent_idx));
+                // parent may be changed because of splitting
+                return self.split_leaf_if_needed(pos);
+            }
+
             let new_leaf = leaf.split(pos.offset);
             let left_cache = B::get_elem_cache(&leaf.elem);
             let cache = B::get_elem_cache(&new_leaf.elem);
@@ -617,11 +627,6 @@ impl<B: BTreeTrait> BTree<B> {
                     },
                 )
                 .unwrap();
-            if parent.is_full() {
-                self.split(ArenaIndex::Internal(parent_idx));
-                // parent may be changed because of splitting
-                return self.split_leaf_if_needed(pos);
-            }
 
             leaf_slot + 1
         };
@@ -1193,6 +1198,125 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
+    /// Update the given leaves with the given function in the given range.
+    ///
+    /// - The range descibes the range inside the leaf node.
+    /// - There can be multiple ranges in the same leaf node.
+    /// - The cahce will be recalculated for each affected node
+    /// - It doesn't guarantee the applying order
+    ///
+    /// Currently, the time complexity is O(m^2) for each leaf node,
+    /// where m is the number of ranges inside the same leaf node.
+    /// If we have a really large m, this function need to be optimized.
+    pub fn update_leaves_with_arg_in_ranges<A>(
+        &mut self,
+        mut args: Vec<(LeafIndex, Range<usize>, A)>,
+        mut f: impl FnMut(&mut B::Elem, &A),
+    ) -> Vec<LeafIndex> {
+        args.sort_by_key(|x| x.0);
+        let mut new_leaves = Vec::new();
+        let mut dirty_map: LeafDirtyMap<B::CacheDiff> = Default::default();
+        let mut new_elems_at_cursor: FxHashMap<Cursor, Vec<B::Elem>> = Default::default();
+        for (leaf, group) in &args.into_iter().group_by(|x| x.0) {
+            // This loop doesn't change the shape of the tree.  It only changes each leaf element.
+            // A leaf element may be splitted into several parts. The first part stay in the tree,
+            // while the rest of them are inserted into `new_elem_at_cursor`, which will be inserted
+            // into the tree later.
+            let leaf_node = self.leaf_nodes.get_mut(leaf.0).unwrap();
+            let len = leaf_node.elem().rle_len();
+            let mut split_at = BTreeSet::new();
+            // PERF we can avoid this alloc and `group_by`
+            let group: Vec<_> = group.into_iter().collect();
+            for (_, range, _) in group.iter() {
+                split_at.insert(range.start);
+                split_at.insert(range.end);
+            }
+
+            split_at.remove(&0);
+            split_at.remove(&len);
+
+            // leaf_node.elem is the first elem
+            let old_cache = B::get_elem_cache(&leaf_node.elem);
+            if split_at.is_empty() {
+                // doesn't need to split
+                for (_, range, a) in group.iter() {
+                    assert_eq!(range.start, 0);
+                    assert_eq!(range.end, len);
+                    f(&mut leaf_node.elem, a);
+                }
+            } else {
+                let mut new_elems = Vec::new();
+
+                let first_split = split_at.first().copied().unwrap();
+
+                // handle first element
+                let mut elem = leaf_node.elem.split(first_split);
+                for (_, r, a) in group.iter() {
+                    if r.start == 0 {
+                        f(&mut leaf_node.elem, a);
+                    }
+                }
+
+                // handle elements in the middle
+                let mut last_index = first_split;
+                for &index in split_at.iter().skip(1) {
+                    let next_elem = elem.split(index - last_index);
+                    let cur_range = last_index..index;
+                    for (_, r, a) in group.iter() {
+                        if r.start <= cur_range.start && cur_range.end <= r.end {
+                            f(&mut elem, a);
+                        }
+                    }
+
+                    new_elems.push(elem);
+                    elem = next_elem;
+                    last_index = index;
+                }
+
+                // handle the last element
+                for (_, r, a) in group.iter() {
+                    if r.end == len {
+                        f(&mut elem, a);
+                    }
+                }
+
+                new_elems.push(elem);
+                new_elems_at_cursor.insert(
+                    Cursor {
+                        leaf,
+                        offset: leaf_node.elem().rle_len(),
+                    },
+                    new_elems,
+                );
+            }
+
+            let new_cache = B::get_elem_cache(&leaf_node.elem);
+            let diff = B::sub_cache(&new_cache, &old_cache);
+            dirty_map.insert(leaf.into(), diff);
+        }
+
+        // update cache
+        self.update_dirty_cache_map(dirty_map);
+
+        // PERF we can use batch insert to optimize this
+        // insert the new leaf nodes
+        for (mut cursor, elems) in new_elems_at_cursor {
+            for elem in elems.into_iter() {
+                // PERF can use insert many to optimize when it's supported
+                let len = elem.rle_len();
+                let result = self.insert_by_path(cursor, elem);
+                new_leaves.push(result.0);
+                debug_assert_eq!(result.1.arr.len(), 0);
+                cursor = Cursor {
+                    leaf: result.0,
+                    offset: len,
+                };
+            }
+        }
+
+        new_leaves
+    }
+
     #[inline]
     fn update_root_cache(&mut self) {
         self.in_nodes
@@ -1662,11 +1786,6 @@ impl<B: BTreeTrait> BTree<B> {
         self.leaf_nodes.get(index.unwrap_leaf()).unwrap()
     }
 
-    #[inline(always)]
-    fn get_in_node_safe(&self, index: ArenaIndex) -> Option<&Node<B>> {
-        self.in_nodes.get(index.unwrap_internal())
-    }
-
     /// The given node is lack of children.
     /// We should merge it into its neighbor or borrow from its neighbor.
     ///
@@ -2095,93 +2214,6 @@ impl<B: BTreeTrait> BTree<B> {
                 leaf: x.unwrap_leaf().into(),
                 offset: 0,
             })
-    }
-
-    fn next_same_level_node_with_filter(
-        &self,
-        node_idx: ArenaIndex,
-        end_path: &[Idx],
-        filter: &dyn Fn(&B::Cache) -> bool,
-    ) -> Option<ArenaIndex> {
-        let node = self.get_internal(node_idx);
-        let mut parent = self.get_internal(node.parent?);
-        let mut next_index = node.parent_slot as usize + 1;
-        loop {
-            if let Some(next) = parent.children.get(next_index) {
-                if filter(&next.cache) {
-                    return Some(next.arena);
-                }
-                if next.arena == end_path.last().unwrap().arena {
-                    return None;
-                }
-
-                next_index += 1;
-            } else if end_path[end_path.len() - 2].arena == node.parent.unwrap() {
-                return None;
-            } else if let Some(parent_next) = self.next_same_level_node_with_filter(
-                node.parent?,
-                &end_path[..end_path.len() - 1],
-                filter,
-            ) {
-                parent = self.get_internal(parent_next);
-                next_index = 0;
-            } else {
-                return None;
-            }
-        }
-    }
-
-    /// find the next sibling at the same level
-    ///
-    /// return false if there is no next sibling
-    #[must_use]
-    fn prev_sibling(&self, path: &mut [Idx]) -> bool {
-        if path.len() <= 1 {
-            return false;
-        }
-
-        let depth = path.len();
-        let parent_idx = path[depth - 2];
-        let this_idx = path[depth - 1];
-        let parent = self.get_internal(parent_idx.arena);
-        if this_idx.arr >= 1 {
-            let prev = &parent.children[this_idx.arr - 1];
-            path[depth - 1] = Idx::new(prev.arena, this_idx.arr - 1);
-        } else {
-            if !self.prev_sibling(&mut path[..depth - 1]) {
-                return false;
-            }
-
-            let parent = self.get_internal(path[depth - 2].arena);
-            path[depth - 1] = Idx::new(
-                parent.children.last().unwrap().arena,
-                parent.children.len() - 1,
-            );
-        }
-
-        true
-    }
-
-    /// if index is None, then using the last index
-    fn try_get_path_from_indexes(&self, indexes: &[Option<usize>]) -> Option<NodePath> {
-        debug_assert_eq!(indexes[0], Some(0));
-        let mut path = HeaplessVec::new();
-        path.push(Idx::new(self.root, 0)).unwrap();
-        let mut node_idx = self.root;
-        for &index in indexes[1..].iter() {
-            let node = self.get_internal(node_idx);
-            if node.children.is_empty() {
-                return None;
-            }
-
-            let i = match index {
-                Some(index) => index,
-                None => node.children.len() - 1,
-            };
-            path.push(Idx::new(node.children.get(i)?.arena, i)).unwrap();
-            node_idx = node.children[i].arena;
-        }
-        Some(path)
     }
 
     #[inline(always)]

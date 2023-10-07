@@ -241,6 +241,8 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug> BTreeTrait for Or
 
     #[inline(always)]
     fn new_cache_to_diff(_: &Self::Cache) -> Self::CacheDiff {}
+
+    fn sub_cache(_: &Self::Cache, _: &Self::Cache) -> Self::CacheDiff {}
 }
 
 impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug + 'static> Query<OrdTrait<Key, Value>>
