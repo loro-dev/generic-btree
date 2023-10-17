@@ -1,4 +1,7 @@
-use crate::{delete_range, ArenaIndex, BTree, BTreeTrait, Cursor, LeafNode, NodePath, QueryResult};
+use crate::{
+    delete_range, rle::HasLength, ArenaIndex, BTree, BTreeTrait, Cursor, LeafNode, NodePath,
+    QueryResult,
+};
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
@@ -48,11 +51,24 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
         );
         let leaf_before_drain_range = {
             let node_idx = start_path.last().unwrap().arena;
-            tree.prev_same_level_in_node(node_idx)
+            if start_result.offset == 0 {
+                tree.prev_same_level_in_node(node_idx)
+            } else {
+                Some(node_idx)
+            }
         };
         let leaf_after_drain_range = {
             let node_idx = end_path.last().unwrap().arena;
-            tree.next_same_level_in_node(node_idx)
+            if let Some(end) = end_result {
+                let len = tree.leaf_nodes.get(end.leaf.0).unwrap().elem.rle_len();
+                if len == end.offset {
+                    tree.next_same_level_in_node(node_idx)
+                } else {
+                    Some(node_idx)
+                }
+            } else {
+                None
+            }
         };
         Self {
             current_path: tree.get_path(start_result.leaf.into()),
@@ -220,11 +236,14 @@ impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
 
         // otherwise the path is invalid (e.g. the tree is empty)
         if let Some(before) = leaf_before_drain_range {
-            self.tree.recursive_update_cache(
-                before,
-                leaf_after_drain_range == leaf_before_drain_range,
-                None,
-            );
+            if leaf_before_drain_range == leaf_after_drain_range {
+                self.tree.recursive_update_cache(before, B::USE_DIFF, None);
+            } else {
+                self.tree.recursive_update_cache(before, false, None);
+                if let Some(after) = leaf_after_drain_range {
+                    self.tree.recursive_update_cache(after, false, None);
+                }
+            }
             seal(self.tree, before);
         } else {
             self.tree.update_root_cache();
