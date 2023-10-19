@@ -193,6 +193,7 @@ impl From<RawArenaIndex> for LeafIndex {
 ///
 /// - `start` is Some(start_offset) when it's first element of the given range.
 /// - `end` is Some(end_offset) when it's last element of the given range.
+#[derive(Debug)]
 pub struct ElemSlice<'a, Elem> {
     cursor: Cursor,
     pub elem: &'a Elem,
