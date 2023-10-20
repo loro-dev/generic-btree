@@ -30,7 +30,7 @@ const MAX_CHILDREN_NUM: usize = 16;
 pub trait BTreeTrait {
     type Elem: Debug + HasLength + Sliceable + Mergeable;
     type Cache: Debug + Default + Clone + Eq;
-    type CacheDiff: Debug;
+    type CacheDiff: Debug + Default;
     // Whether we should use cache diff by default
     const USE_DIFF: bool = true;
 
@@ -2568,6 +2568,130 @@ impl<B: BTreeTrait> BTree<B> {
             );
             self.get_path(ArenaIndex::Leaf(leaf_index));
         }
+    }
+}
+
+impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        let mut tree = Self::new();
+        let iter = iter.into_iter();
+        let min_size = iter.size_hint().0;
+        tree.leaf_nodes.reserve(min_size);
+        let max_child_size = MAX_CHILDREN_NUM - 2;
+
+        struct TempInternalNode<B: BTreeTrait> {
+            children: HeaplessVec<Child<B>, MAX_CHILDREN_NUM>,
+            cache: B::Cache,
+            arena_index: RawArenaIndex,
+        }
+
+        let parent_num = min_size / max_child_size + 1;
+        let mut internal_nodes: Vec<TempInternalNode<B>> = Vec::with_capacity(parent_num);
+        let index = if parent_num == 1 {
+            // Because parent_num == 1, we are sure it'll be root
+            tree.root.unwrap()
+        } else {
+            tree.in_nodes.insert(Default::default())
+        };
+        internal_nodes.push(TempInternalNode {
+            children: Default::default(),
+            cache: Default::default(),
+            arena_index: index,
+        });
+
+        // create all leaf nodes and their parents
+        for elem in iter {
+            let parent = match internal_nodes.last_mut() {
+                Some(last) if last.children.len() < max_child_size => last,
+                Some(last) => {
+                    // calculate cache
+                    B::calc_cache_internal(&mut last.cache, &last.children);
+                    let index = tree.in_nodes.insert(Default::default());
+                    internal_nodes.push(TempInternalNode {
+                        children: Default::default(),
+                        cache: Default::default(),
+                        arena_index: index,
+                    });
+                    internal_nodes.last_mut().unwrap()
+                }
+                _ => unreachable!(),
+            };
+
+            let leaf = LeafNode {
+                elem: elem.into(),
+                parent: parent.arena_index,
+            };
+
+            let cache = B::get_elem_cache(&leaf.elem);
+            let leaf_index = tree.leaf_nodes.insert(leaf);
+            parent
+                .children
+                .push(Child {
+                    arena: ArenaIndex::Leaf(leaf_index),
+                    cache,
+                })
+                .unwrap();
+        }
+
+        // recursively create the internal nodes in higher level, until we reach root
+        while internal_nodes.len() > 1 {
+            let parent_num = internal_nodes.len() / max_child_size + 1;
+            let children = std::mem::replace(&mut internal_nodes, Vec::with_capacity(parent_num));
+            let index = if parent_num == 1 {
+                // Because parent_num == 1, we are sure it'll be root
+                tree.root.unwrap()
+            } else {
+                tree.in_nodes.insert(Default::default())
+            };
+            internal_nodes.push(TempInternalNode {
+                children: Default::default(),
+                cache: Default::default(),
+                arena_index: index,
+            });
+
+            let mut parent_slot = 0;
+            for mut child in children {
+                let parent = match internal_nodes.last_mut() {
+                    Some(last) if last.children.len() < max_child_size => last,
+                    Some(last) => {
+                        // calculate cache
+                        B::calc_cache_internal(&mut last.cache, &last.children);
+                        let index = tree.in_nodes.insert(Default::default());
+                        internal_nodes.push(TempInternalNode {
+                            children: Default::default(),
+                            cache: Default::default(),
+                            arena_index: index,
+                        });
+                        parent_slot = (parent_slot + 1) % (max_child_size as u8);
+                        internal_nodes.last_mut().unwrap()
+                    }
+                    _ => unreachable!(),
+                };
+
+                B::calc_cache_internal(&mut child.cache, &child.children);
+                let child_node = tree.in_nodes.get_mut(child.arena_index).unwrap();
+                child_node.children = child.children;
+                child_node.parent = Some(ArenaIndex::Internal(parent.arena_index));
+                child_node.parent_slot = parent_slot;
+                parent
+                    .children
+                    .push(Child {
+                        arena: ArenaIndex::Internal(child.arena_index),
+                        cache: child.cache,
+                    })
+                    .unwrap();
+            }
+
+            debug_assert_eq!(parent_num, internal_nodes.len());
+        }
+
+        debug_assert_eq!(internal_nodes.len(), 1);
+        let node = internal_nodes.remove(0);
+        B::calc_cache_internal(&mut tree.root_cache, &node.children);
+        let root = tree.root.unwrap();
+        tree.in_nodes.get_mut(root).unwrap().children = node.children;
+
+        tree
     }
 }
 

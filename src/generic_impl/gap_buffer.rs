@@ -224,6 +224,18 @@ impl Mergeable for GapBuffer {
     }
 }
 
+impl<'a> From<&'a str> for GapBuffer {
+    fn from(value: &'a str) -> Self {
+        Self::from_str(value)
+    }
+}
+
+impl From<String> for GapBuffer {
+    fn from(value: String) -> Self {
+        Self::from_str(&value)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

@@ -3365,6 +3365,32 @@ mod test {
     }
 
     #[test]
+    fn from_str() {
+        for i in 0..100000 {
+            let s = i.to_string();
+            let g = GapBuffer::from_str(&s);
+            assert_eq!(s.len(), g.len());
+        }
+    }
+
+    #[test]
+    fn from_iter() {
+        let mut v = vec![];
+        for i in 0..100000 {
+            v.push(i.to_string());
+        }
+
+        let rope = Rope {
+            tree: v.iter().map(|x| x.as_str()).collect(),
+            cursor: None,
+        };
+
+        let s = v.join("");
+        assert_eq!(rope.to_string(), s);
+        assert_eq!(rope.len(), s.len());
+    }
+
+    #[test]
     fn fuzz_empty() {
         fuzz(vec![])
     }
