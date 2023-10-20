@@ -74,7 +74,6 @@ dependencies = [
  "fxhash",
  "heapless",
  "proc-macro2",
- "smallvec",
  "thunderdome",
 ]
 

@@ -20,7 +20,6 @@ fxhash = "0.2.1"
 heapless = "0.7.16"
 itertools = "0.11.0"
 proc-macro2 = "1.0.67"
-smallvec = { version = "1.10.0", features = [] }
 thunderdome = { git="https://github.com/zxch3n/thunderdome.git", features = [] }
 
 

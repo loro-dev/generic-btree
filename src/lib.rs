@@ -9,7 +9,6 @@ use std::{cmp::Ordering, mem::take, ops::RangeBounds};
 use fxhash::{FxHashMap, FxHashSet};
 pub(crate) use heapless::Vec as HeaplessVec;
 use itertools::Itertools;
-use smallvec::SmallVec;
 use thunderdome::Arena;
 use thunderdome::Index as RawArenaIndex;
 
@@ -2093,7 +2092,7 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     fn purge(&mut self, index: ArenaIndex) {
-        let mut stack: SmallVec<[_; 64]> = smallvec::smallvec![index];
+        let mut stack = vec![index];
         while let Some(x) = stack.pop() {
             if let ArenaIndex::Leaf(index) = x {
                 self.leaf_nodes.remove(index);
