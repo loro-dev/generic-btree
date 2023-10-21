@@ -2584,7 +2584,7 @@ impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
             arena_index: RawArenaIndex,
         }
 
-        let parent_num = min_size / max_child_size + 1;
+        let parent_num = (min_size + max_child_size - 1) / max_child_size;
         let mut internal_nodes: Vec<TempInternalNode<B>> = Vec::with_capacity(parent_num);
         let index = if parent_num == 1 {
             // Because parent_num == 1, we are sure it'll be root
@@ -2634,7 +2634,7 @@ impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
 
         // recursively create the internal nodes in higher level, until we reach root
         while internal_nodes.len() > 1 {
-            let parent_num = internal_nodes.len() / max_child_size + 1;
+            let parent_num = (internal_nodes.len() + max_child_size - 1) / max_child_size;
             let children = std::mem::replace(&mut internal_nodes, Vec::with_capacity(parent_num));
             let index = if parent_num == 1 {
                 // Because parent_num == 1, we are sure it'll be root
@@ -2649,6 +2649,11 @@ impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
             });
 
             let mut parent_slot = 0;
+            eprintln!(
+                "children.len={} max_child_size={}",
+                children.len(),
+                max_child_size
+            );
             for mut child in children {
                 let parent = match internal_nodes.last_mut() {
                     Some(last) if last.children.len() < max_child_size => last,
@@ -2661,7 +2666,6 @@ impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
                             cache: Default::default(),
                             arena_index: index,
                         });
-                        parent_slot = (parent_slot + 1) % (max_child_size as u8);
                         internal_nodes.last_mut().unwrap()
                     }
                     _ => unreachable!(),
@@ -2672,6 +2676,7 @@ impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
                 child_node.children = child.children;
                 child_node.parent = Some(ArenaIndex::Internal(parent.arena_index));
                 child_node.parent_slot = parent_slot;
+                parent_slot = (parent_slot + 1) % (max_child_size as u8);
                 parent
                     .children
                     .push(Child {

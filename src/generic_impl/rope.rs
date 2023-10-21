@@ -3388,6 +3388,7 @@ mod test {
         let s = v.join("");
         assert_eq!(rope.to_string(), s);
         assert_eq!(rope.len(), s.len());
+        rope.tree.check();
     }
 
     #[test]
