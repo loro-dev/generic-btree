@@ -2586,12 +2586,7 @@ impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
 
         let parent_num = (min_size + max_child_size - 1) / max_child_size;
         let mut internal_nodes: Vec<TempInternalNode<B>> = Vec::with_capacity(parent_num);
-        let index = if parent_num == 1 {
-            // Because parent_num == 1, we are sure it'll be root
-            tree.root.unwrap()
-        } else {
-            tree.in_nodes.insert(Default::default())
-        };
+        let index = tree.in_nodes.insert(Default::default());
         internal_nodes.push(TempInternalNode {
             children: Default::default(),
             cache: Default::default(),
@@ -2636,12 +2631,7 @@ impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
         while internal_nodes.len() > 1 {
             let parent_num = (internal_nodes.len() + max_child_size - 1) / max_child_size;
             let children = std::mem::replace(&mut internal_nodes, Vec::with_capacity(parent_num));
-            let index = if parent_num == 1 {
-                // Because parent_num == 1, we are sure it'll be root
-                tree.root.unwrap()
-            } else {
-                tree.in_nodes.insert(Default::default())
-            };
+            let index = tree.in_nodes.insert(Default::default());
             internal_nodes.push(TempInternalNode {
                 children: Default::default(),
                 cache: Default::default(),
@@ -2692,9 +2682,10 @@ impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
         debug_assert_eq!(internal_nodes.len(), 1);
         let node = internal_nodes.remove(0);
         B::calc_cache_internal(&mut tree.root_cache, &node.children);
+        tree.in_nodes.remove(tree.root.unwrap());
+        tree.root = ArenaIndex::Internal(node.arena_index);
         let root = tree.root.unwrap();
         tree.in_nodes.get_mut(root).unwrap().children = node.children;
-
         tree
     }
 }
