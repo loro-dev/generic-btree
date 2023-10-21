@@ -2639,11 +2639,11 @@ impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
             });
 
             let mut parent_slot = 0;
-            eprintln!(
-                "children.len={} max_child_size={}",
-                children.len(),
-                max_child_size
-            );
+            // eprintln!(
+            //     "children.len={} max_child_size={}",
+            //     children.len(),
+            //     max_child_size
+            // );
             for mut child in children {
                 let parent = match internal_nodes.last_mut() {
                     Some(last) if last.children.len() < max_child_size => last,
