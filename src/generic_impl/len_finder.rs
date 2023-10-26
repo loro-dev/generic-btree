@@ -58,7 +58,11 @@ impl<Elem: 'static + HasLength + Debug, B: BTreeTrait<Elem = Elem> + UseLengthFi
     }
 
     #[inline(always)]
-    fn confirm_elem(&self, _: &Self::QueryArg, elem: &<B as BTreeTrait>::Elem) -> (usize, bool) {
+    fn confirm_elem(
+        &mut self,
+        _: &Self::QueryArg,
+        elem: &<B as BTreeTrait>::Elem,
+    ) -> (usize, bool) {
         (self.left, self.left < elem.rle_len())
     }
 }

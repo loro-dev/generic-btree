@@ -281,7 +281,7 @@ impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug + 'static> Query<O
 
     #[inline(always)]
     fn confirm_elem(
-        &self,
+        &mut self,
         q: &Self::QueryArg,
         elem: &<OrdTrait<Key, Value> as BTreeTrait>::Elem,
     ) -> (usize, bool) {

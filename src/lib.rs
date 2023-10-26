@@ -52,7 +52,7 @@ pub trait Query<B: BTreeTrait> {
     /// Confirm the search result and returns (offset, found)
     ///
     /// If elem is not target, `found=false`
-    fn confirm_elem(&self, q: &Self::QueryArg, elem: &B::Elem) -> (usize, bool);
+    fn confirm_elem(&mut self, q: &Self::QueryArg, elem: &B::Elem) -> (usize, bool);
 }
 
 pub struct BTree<B: BTreeTrait> {
@@ -737,6 +737,11 @@ impl<B: BTreeTrait> BTree<B> {
         B::Elem: rle::HasLength,
     {
         let leaf = self.leaf_nodes.get(path.leaf.0).unwrap();
+        if path.offset + 1 < leaf.elem.rle_len() {
+            path.offset += 1;
+            return Some(path);
+        }
+
         let mut parent_idx = leaf.parent;
         let mut parent = self.in_nodes.get(leaf.parent).unwrap();
         let mut elem_slot_index = Self::get_leaf_slot(path.leaf.0, parent);
