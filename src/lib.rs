@@ -2320,6 +2320,7 @@ impl<B: BTreeTrait> BTree<B> {
         let mut is_full = false;
         let mut parent_idx = self.root;
         let mut update_cache_idx = parent_idx;
+        let cache = B::get_elem_cache(&elem);
         let ans = if self.is_empty() {
             let data = self.alloc_leaf_child(elem, parent_idx.unwrap());
             let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
@@ -2328,23 +2329,28 @@ impl<B: BTreeTrait> BTree<B> {
             ans.unwrap().into()
         } else {
             let leaf_idx = self.last_leaf();
-            update_cache_idx = leaf_idx;
             let leaf = self.leaf_nodes.get_mut(leaf_idx.unwrap_leaf()).unwrap();
             parent_idx = leaf.parent();
             if leaf.elem.can_merge(&elem) {
+                update_cache_idx = leaf_idx;
                 leaf.elem.merge_right(&elem);
                 leaf_idx.unwrap().into()
             } else {
                 let data = self.alloc_leaf_child(elem, parent_idx.unwrap());
                 let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
                 let ans = data.arena;
+                update_cache_idx = parent_idx;
                 parent.children.push(data).unwrap();
                 is_full = parent.is_full();
                 ans.unwrap().into()
             }
         };
 
-        self.recursive_update_cache(update_cache_idx, B::USE_DIFF, None);
+        self.recursive_update_cache(
+            update_cache_idx,
+            B::USE_DIFF,
+            Some(B::new_cache_to_diff(&cache)),
+        );
         if is_full {
             self.split(parent_idx);
         }
