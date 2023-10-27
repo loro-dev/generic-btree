@@ -1161,16 +1161,16 @@ impl<B: BTreeTrait> BTree<B> {
     pub fn update_leaf(
         &mut self,
         node_idx: LeafIndex,
-        f: impl FnOnce(&mut B::Elem) -> (bool, Option<B::CacheDiff>, Option<B::Elem>, Option<B::Elem>),
+        f: impl FnOnce(&mut B::Elem) -> (bool, Option<B::Elem>, Option<B::Elem>),
     ) -> (bool, SplittedLeaves) {
         let mut splitted = SplittedLeaves::default();
         let node = self.leaf_nodes.get_mut(node_idx.0).unwrap();
-        let parent_idx = node.parent();
-        let (need_update_cache, diff, new_insert_1, new_insert_2) = f(&mut node.elem);
+        let mut parent_idx = node.parent();
+        let (need_update_cache, new_insert_1, new_insert_2) = f(&mut node.elem);
         let deleted = node.elem.rle_len() == 0;
 
         if need_update_cache {
-            self.recursive_update_cache(node_idx.into(), B::USE_DIFF, diff);
+            self.recursive_update_cache(node_idx.into(), B::USE_DIFF, None);
         }
 
         if deleted {
@@ -1190,22 +1190,64 @@ impl<B: BTreeTrait> BTree<B> {
             debug_assert!(new_insert_2.is_none());
             return (true, splitted);
         } else {
+            if new_insert_1.is_some() && new_insert_2.is_none() {
+                // try merge new insert to next element
+                let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
+                let slot = Self::get_leaf_slot(node_idx.0, parent);
+                if slot + 1 < parent.children.len() {
+                    let next_idx = parent.children[slot + 1].arena.unwrap().into();
+                    let next = self.get_elem_mut(next_idx).unwrap();
+                    let new = new_insert_1.as_ref().unwrap();
+                    if new.can_merge(next) {
+                        next.merge_left(new);
+                        self.recursive_update_cache(next_idx.into(), B::USE_DIFF, None);
+                        splitted.push(next_idx.into());
+                        return (true, splitted);
+                    }
+                }
+            }
+
+            let count = if new_insert_1.is_some() { 1 } else { 0 }
+                + if new_insert_2.is_some() { 1 } else { 0 };
+            let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
+            let parent = if parent.children.len() + count >= MAX_CHILDREN_NUM {
+                self.split(parent_idx);
+                let node = self.leaf_nodes.get(node_idx.0).unwrap();
+                parent_idx = node.parent();
+                self.in_nodes.get_mut(parent_idx.unwrap()).unwrap()
+            } else {
+                parent
+            };
+
             let new: HeaplessVec<_, 2> = new_insert_1
                 .into_iter()
                 .chain(new_insert_2)
-                .map(|elem| self.alloc_leaf_child(elem, parent_idx.unwrap()))
+                .map(|elem| {
+                    // Allocate new leaf node
+                    let parent_index = parent_idx.unwrap();
+                    let elem_cache = B::get_elem_cache(&elem);
+                    let new_leaf_index = {
+                        let leaf = LeafNode {
+                            elem,
+                            parent: parent_index,
+                        };
+                        let arena_index = self.leaf_nodes.insert(leaf);
+                        ArenaIndex::Leaf(arena_index)
+                    };
+                    Child {
+                        arena: new_leaf_index,
+                        cache: elem_cache,
+                    }
+                })
                 .collect();
-            let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
             let slot = Self::get_leaf_slot(node_idx.0, parent);
             for (i, v) in new.into_iter().enumerate() {
                 splitted.push(v.arena);
                 parent.children.insert(slot + 1 + i, v).unwrap();
             }
-            let is_full = parent.is_full();
-            if is_full {
-                self.split(parent_idx);
-            }
 
+            assert!(!parent.is_full());
+            self.recursive_update_cache(parent_idx, B::USE_DIFF, None);
             (true, splitted)
         }
     }
@@ -1220,7 +1262,7 @@ impl<B: BTreeTrait> BTree<B> {
     /// Currently, the time complexity is O(m^2) for each leaf node,
     /// where m is the number of ranges inside the same leaf node.
     /// If we have a really large m, this function need to be optimized.
-    pub fn update_leaves_with_arg_in_ranges<A>(
+    pub fn update_leaves_with_arg_in_ranges<A: Debug>(
         &mut self,
         mut args: Vec<(LeafIndex, Range<usize>, A)>,
         mut f: impl FnMut(&mut B::Elem, &A),

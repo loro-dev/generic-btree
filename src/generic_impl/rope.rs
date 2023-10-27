@@ -66,7 +66,7 @@ impl Rope {
                         .update_leaf(leaf, |leaf| {
                             if leaf.len() + elem.len() < MAX_LEN.max(leaf.capacity()) {
                                 leaf.insert_bytes(offset, elem.as_bytes());
-                                (true, Some(elem.len() as isize), None, None)
+                                (true, None, None)
                             } else {
                                 let mut right = leaf.split(offset);
                                 if leaf.len() + elem.len() < MAX_LEN {
@@ -75,7 +75,7 @@ impl Rope {
                                     right.insert_bytes(0, elem.as_bytes());
                                 }
 
-                                (true, Some(elem.len() as isize), Some(right), None)
+                                (true, Some(right), None)
                             }
                         })
                         .0;
@@ -143,7 +143,7 @@ impl Rope {
                         .tree
                         .update_leaf(leaf, |leaf| {
                             leaf.delete(start_offset..end_offset);
-                            (true, Some(start as isize - end as isize), None, None)
+                            (true, None, None)
                         })
                         .0;
 

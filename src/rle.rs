@@ -62,7 +62,7 @@ pub trait Sliceable: HasLength + Sized {
             std::ops::Bound::Unbounded => self.rle_len(),
         };
 
-        if start == end {
+        if start >= end {
             return (None, None);
         }
 
