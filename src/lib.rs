@@ -1357,8 +1357,8 @@ impl<B: BTreeTrait> BTree<B> {
         for (mut cursor, elems) in new_elems_at_cursor {
             for elem in elems.into_iter() {
                 // PERF can use insert many to optimize when it's supported
-                let len = elem.rle_len();
                 let result = self.insert_by_path(cursor, elem);
+                let len = self.get_elem(result.0).unwrap().rle_len();
                 new_leaves.push(result.0);
                 debug_assert_eq!(result.1.arr.len(), 0);
                 cursor = Cursor {
