@@ -501,7 +501,7 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// Returns (insert_pos, splitted_leaves)
     #[inline]
-    pub fn insert<Q>(&mut self, q: &Q::QueryArg, data: B::Elem) -> (LeafIndex, SplittedLeaves)
+    pub fn insert<Q>(&mut self, q: &Q::QueryArg, data: B::Elem) -> (Cursor, SplittedLeaves)
     where
         Q: Query<B>,
     {
@@ -512,7 +512,7 @@ impl<B: BTreeTrait> BTree<B> {
         self.insert_by_path(result.cursor, data)
     }
 
-    pub fn insert_by_path(&mut self, cursor: Cursor, data: B::Elem) -> (LeafIndex, SplittedLeaves) {
+    pub fn insert_by_path(&mut self, cursor: Cursor, data: B::Elem) -> (Cursor, SplittedLeaves) {
         let index = cursor.leaf;
         let leaf = self.leaf_nodes.get_mut(index.0).unwrap();
         let mut parent_idx = leaf.parent();
@@ -523,10 +523,17 @@ impl<B: BTreeTrait> BTree<B> {
         // Try to merge
         let ans = if cursor.offset == 0 && data.can_merge(&leaf.elem) {
             leaf.elem.merge_left(&data);
-            index
+            Cursor {
+                leaf: index,
+                offset: 0,
+            }
         } else if cursor.offset == leaf.elem.rle_len() && leaf.elem.can_merge(&data) {
+            let offset = leaf.elem.rle_len();
             leaf.elem.merge_right(&data);
-            index
+            Cursor {
+                leaf: index,
+                offset,
+            }
         } else {
             // Insert new leaf node
             let SplitInfo {
@@ -542,7 +549,10 @@ impl<B: BTreeTrait> BTree<B> {
             let parent = self.in_nodes.get_mut(parent_index).unwrap();
             parent.children.insert(insert_index, child).unwrap();
             is_full = parent.is_full();
-            ans.unwrap().into()
+            Cursor {
+                leaf: ans.unwrap().into(),
+                offset: 0,
+            }
         };
 
         self.recursive_update_cache(cursor.leaf.into(), B::USE_DIFF, Some(cache_diff));
@@ -1358,11 +1368,11 @@ impl<B: BTreeTrait> BTree<B> {
             for elem in elems.into_iter() {
                 // PERF can use insert many to optimize when it's supported
                 let result = self.insert_by_path(cursor, elem);
-                let len = self.get_elem(result.0).unwrap().rle_len();
-                new_leaves.push(result.0);
+                let len = self.get_elem(result.0.leaf).unwrap().rle_len();
+                new_leaves.push(result.0.leaf);
                 debug_assert_eq!(result.1.arr.len(), 0);
                 cursor = Cursor {
-                    leaf: result.0,
+                    leaf: result.0.leaf,
                     offset: len,
                 };
             }
@@ -2316,7 +2326,7 @@ impl<B: BTreeTrait> BTree<B> {
         path
     }
 
-    pub fn push(&mut self, elem: B::Elem) -> LeafIndex {
+    pub fn push(&mut self, elem: B::Elem) -> Cursor {
         let mut is_full = false;
         let mut parent_idx = self.root;
         let mut update_cache_idx = parent_idx;
@@ -2326,15 +2336,22 @@ impl<B: BTreeTrait> BTree<B> {
             let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
             let ans = data.arena;
             parent.children.push(data).unwrap();
-            ans.unwrap().into()
+            Cursor {
+                leaf: ans.unwrap().into(),
+                offset: 0,
+            }
         } else {
             let leaf_idx = self.last_leaf();
             let leaf = self.leaf_nodes.get_mut(leaf_idx.unwrap_leaf()).unwrap();
             parent_idx = leaf.parent();
             if leaf.elem.can_merge(&elem) {
                 update_cache_idx = leaf_idx;
+                let offset = leaf.elem.rle_len();
                 leaf.elem.merge_right(&elem);
-                leaf_idx.unwrap().into()
+                Cursor {
+                    leaf: leaf_idx.unwrap().into(),
+                    offset,
+                }
             } else {
                 let data = self.alloc_leaf_child(elem, parent_idx.unwrap());
                 let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
@@ -2342,7 +2359,10 @@ impl<B: BTreeTrait> BTree<B> {
                 update_cache_idx = parent_idx;
                 parent.children.push(data).unwrap();
                 is_full = parent.is_full();
-                ans.unwrap().into()
+                Cursor {
+                    leaf: ans.unwrap().into(),
+                    offset: 0,
+                }
             }
         };
 
@@ -2358,14 +2378,17 @@ impl<B: BTreeTrait> BTree<B> {
         ans
     }
 
-    pub fn prepend(&mut self, elem: B::Elem) -> LeafIndex {
+    pub fn prepend(&mut self, elem: B::Elem) -> Cursor {
         let leaf_idx = self.first_leaf();
         let leaf = self.leaf_nodes.get_mut(leaf_idx.unwrap_leaf()).unwrap();
         let parent_idx = leaf.parent();
         let mut is_full = false;
         let ans = if elem.can_merge(&leaf.elem) {
             leaf.elem.merge_left(&elem);
-            leaf_idx.unwrap().into()
+            Cursor {
+                leaf: leaf_idx.unwrap().into(),
+                offset: 0,
+            }
         } else {
             let parent_idx = leaf.parent;
             let data = self.alloc_leaf_child(elem, parent_idx);
@@ -2373,7 +2396,10 @@ impl<B: BTreeTrait> BTree<B> {
             let ans = data.arena;
             parent.children.insert(0, data).unwrap();
             is_full = parent.is_full();
-            ans.unwrap().into()
+            Cursor {
+                leaf: ans.unwrap().into(),
+                offset: 0,
+            }
         };
 
         self.recursive_update_cache(leaf_idx, B::USE_DIFF, None);
