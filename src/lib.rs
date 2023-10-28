@@ -2369,7 +2369,11 @@ impl<B: BTreeTrait> BTree<B> {
         self.recursive_update_cache(
             update_cache_idx,
             B::USE_DIFF,
-            Some(B::new_cache_to_diff(&cache)),
+            if B::USE_DIFF {
+                Some(B::new_cache_to_diff(&cache))
+            } else {
+                None
+            },
         );
         if is_full {
             self.split(parent_idx);
