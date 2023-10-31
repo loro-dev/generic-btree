@@ -1882,6 +1882,7 @@ impl<B: BTreeTrait> BTree<B> {
             let slot = node.parent_slot as usize;
             self.get_internal_mut(parent_idx).children.remove(slot);
             self.in_nodes.remove(node_idx.unwrap_internal());
+            self.update_children_parent_slot_from(parent_idx, slot);
             return LackInfo {
                 parent_lack: Some(parent_idx),
             };
