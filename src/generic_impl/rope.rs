@@ -3392,6 +3392,22 @@ mod test {
     }
 
     #[test]
+    fn drain() {
+        let mut rope = Rope::new();
+        for i in 0..100000 {
+            rope.insert(0, &i.to_string());
+        }
+
+        while rope.len() > 0 {
+            let leaf = rope.tree.first_leaf();
+            rope.tree.update_leaf(leaf.unwrap_leaf().into(), |elem| {
+                elem.slice_(1..1);
+                (true, None, None)
+            });
+        }
+    }
+
+    #[test]
     fn fuzz_empty() {
         fuzz(vec![])
     }

@@ -1870,13 +1870,22 @@ impl<B: BTreeTrait> BTree<B> {
     /// - The caches in the parent node will be updated
     fn handle_lack_single_layer(&mut self, node_idx: ArenaIndex) -> LackInfo {
         if self.root == node_idx {
+            self.try_reduce_levels();
             return LackInfo { parent_lack: None };
         }
 
         let node = self.get_internal(node_idx);
         let parent_idx = node.parent.unwrap();
         let parent = self.get_internal(parent_idx);
-        debug_assert_eq!(parent.children[node.parent_slot as usize].arena, node_idx,);
+        debug_assert_eq!(parent.children[node.parent_slot as usize].arena, node_idx);
+        if node.children.is_empty() {
+            let slot = node.parent_slot as usize;
+            self.get_internal_mut(parent_idx).children.remove(slot);
+            self.in_nodes.remove(node_idx.unwrap_internal());
+            return LackInfo {
+                parent_lack: Some(parent_idx),
+            };
+        }
         let ans = match self.pair_neighbor(node_idx) {
             Some((a_idx, b_idx)) => {
                 let parent = self.get_internal_mut(parent_idx);
