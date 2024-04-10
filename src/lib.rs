@@ -516,7 +516,11 @@ impl<B: BTreeTrait> BTree<B> {
         let index = cursor.leaf;
         let leaf = self.leaf_nodes.get_mut(index.0).unwrap();
         let mut parent_idx = leaf.parent();
-        let cache_diff = B::new_cache_to_diff(&B::get_elem_cache(&data));
+        let cache_diff = if B::USE_DIFF {
+            Some(B::new_cache_to_diff(&B::get_elem_cache(&data)))
+        } else {
+            None
+        };
 
         let mut is_full = false;
         let mut splitted: SplittedLeaves = Default::default();
@@ -555,7 +559,7 @@ impl<B: BTreeTrait> BTree<B> {
             }
         };
 
-        self.recursive_update_cache(cursor.leaf.into(), B::USE_DIFF, Some(cache_diff));
+        self.recursive_update_cache(cursor.leaf.into(), B::USE_DIFF, cache_diff);
         if is_full {
             self.split(parent_idx);
         }
@@ -2140,7 +2144,10 @@ impl<B: BTreeTrait> BTree<B> {
 
         let mut root_cache = std::mem::take(&mut self.root_cache);
         let root = self.root_mut();
-        root.calc_cache(&mut root_cache, cache_diff);
+        root.calc_cache(
+            &mut root_cache,
+            if can_use_diff { cache_diff } else { None },
+        );
         self.root_cache = root_cache;
     }
 
