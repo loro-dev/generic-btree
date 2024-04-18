@@ -1,7 +1,7 @@
 [package]
 name = "generic-btree"
 author = "Zixuan Chen"
-version = "0.8.3"
+version = "0.8.4"
 edition = "2021"
 description = "Generic BTree for versatile purposes"
 readme = "README.md"
