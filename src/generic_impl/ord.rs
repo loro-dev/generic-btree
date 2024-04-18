@@ -76,9 +76,7 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
 
     #[inline(always)]
     pub fn delete(&mut self, key: &Key) -> Option<(Key, Value)> {
-        let Some(q) = self.tree.query::<OrdTrait<Key, Value>>(key) else {
-            return None;
-        };
+        let q = self.tree.query::<OrdTrait<Key, Value>>(key)?;
         match self.tree.remove_leaf(q.cursor) {
             Some(v) => {
                 self.len -= 1;
@@ -261,7 +259,7 @@ impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug + 'static> Query<O
         target: &Self::QueryArg,
         child_caches: &[crate::Child<OrdTrait<Key, Value>>],
     ) -> crate::FindResult {
-        match child_caches.binary_search_by(|x| {
+        let result = child_caches.binary_search_by(|x| {
             let (min, max) = x.cache.as_ref().unwrap();
             if target < min {
                 core::cmp::Ordering::Greater
@@ -270,7 +268,8 @@ impl<Key: Ord + Clone + Debug + 'static, Value: Clone + Debug + 'static> Query<O
             } else {
                 core::cmp::Ordering::Equal
             }
-        }) {
+        });
+        match result {
             Ok(i) => FindResult::new_found(i, 0),
             Err(i) => FindResult::new_missing(
                 i.min(child_caches.len() - 1),

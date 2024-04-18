@@ -864,9 +864,7 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// If it's already removed, this method will return None
     pub fn remove_leaf(&mut self, path: Cursor) -> Option<B::Elem> {
-        let Some(leaf) = self.leaf_nodes.get_mut(path.leaf.0) else {
-            return None;
-        };
+        let leaf = self.leaf_nodes.get_mut(path.leaf.0)?;
         let parent_idx = leaf.parent();
         let parent = self.in_nodes.get_mut(leaf.parent).unwrap();
         let index = Self::get_leaf_slot(path.leaf.0, parent);
@@ -1559,26 +1557,26 @@ impl<B: BTreeTrait> BTree<B> {
         Some(path)
     }
 
-    pub fn first_leaf(&self) -> ArenaIndex {
+    pub fn first_leaf(&self) -> Option<LeafIndex> {
         let mut index = self.root;
         let mut node = self.in_nodes.get(index.unwrap_internal()).unwrap();
         loop {
             index = node.children[0].arena;
             if matches!(index, ArenaIndex::Leaf(_)) {
-                return index;
+                return Some(index.unwrap_leaf().into());
             };
 
             node = self.in_nodes.get(index.unwrap_internal()).unwrap();
         }
     }
 
-    pub fn last_leaf(&self) -> ArenaIndex {
+    pub fn last_leaf(&self) -> Option<LeafIndex> {
         let mut index = self.root;
         let mut node = self.in_nodes.get(index.unwrap_internal()).unwrap();
         loop {
-            index = node.children[node.children.len() - 1].arena;
+            index = node.children.last()?.arena;
             if matches!(index, ArenaIndex::Leaf(_)) {
-                return index;
+                return Some(index.unwrap_leaf().into());
             };
 
             node = self.in_nodes.get(index.unwrap_internal()).unwrap();
@@ -1605,12 +1603,12 @@ impl<B: BTreeTrait> BTree<B> {
         let start = match range.start_bound() {
             std::ops::Bound::Included(start) => *start,
             std::ops::Bound::Excluded(_) => unreachable!(),
-            std::ops::Bound::Unbounded => self.start_cursor(),
+            std::ops::Bound::Unbounded => self.start_cursor().unwrap(),
         };
         let (inclusive, end) = match range.end_bound() {
             std::ops::Bound::Included(end) => (true, *end),
             std::ops::Bound::Excluded(end) => (false, *end),
-            std::ops::Bound::Unbounded => (true, self.end_cursor()),
+            std::ops::Bound::Unbounded => (true, self.end_cursor().unwrap()),
         };
         self._iter_range(start, end, inclusive)
     }
@@ -1650,21 +1648,21 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     #[inline(always)]
-    pub fn start_cursor(&self) -> Cursor {
-        Cursor {
-            leaf: self.first_leaf().unwrap_leaf().into(),
+    pub fn start_cursor(&self) -> Option<Cursor> {
+        Some(Cursor {
+            leaf: self.first_leaf()?,
             offset: 0,
-        }
+        })
     }
 
     #[inline(always)]
-    pub fn end_cursor(&self) -> Cursor {
-        let leaf = self.last_leaf();
-        let node = self.get_leaf(leaf);
-        Cursor {
-            leaf: leaf.unwrap_leaf().into(),
+    pub fn end_cursor(&self) -> Option<Cursor> {
+        let leaf = self.last_leaf()?;
+        let node = self.get_leaf(leaf.into());
+        Some(Cursor {
+            leaf,
             offset: node.elem.rle_len(),
-        }
+        })
     }
 
     /// Split the internal node at path into two nodes recursively upwards.
@@ -2358,15 +2356,15 @@ impl<B: BTreeTrait> BTree<B> {
                 offset: 0,
             }
         } else {
-            let leaf_idx = self.last_leaf();
-            let leaf = self.leaf_nodes.get_mut(leaf_idx.unwrap_leaf()).unwrap();
+            let leaf_idx = self.last_leaf().unwrap();
+            let leaf = self.leaf_nodes.get_mut(leaf_idx.0).unwrap();
             parent_idx = leaf.parent();
             if leaf.elem.can_merge(&elem) {
-                update_cache_idx = leaf_idx;
+                update_cache_idx = leaf_idx.into();
                 let offset = leaf.elem.rle_len();
                 leaf.elem.merge_right(&elem);
                 Cursor {
-                    leaf: leaf_idx.unwrap().into(),
+                    leaf: leaf_idx,
                     offset,
                 }
             } else {
@@ -2400,14 +2398,24 @@ impl<B: BTreeTrait> BTree<B> {
     }
 
     pub fn prepend(&mut self, elem: B::Elem) -> Cursor {
-        let leaf_idx = self.first_leaf();
-        let leaf = self.leaf_nodes.get_mut(leaf_idx.unwrap_leaf()).unwrap();
+        let Some(leaf_idx) = self.first_leaf() else {
+            let parent_idx = self.root;
+            let data = self.alloc_leaf_child(elem, parent_idx.unwrap());
+            let parent = self.in_nodes.get_mut(parent_idx.unwrap()).unwrap();
+            let ans = data.arena;
+            parent.children.push(data).unwrap();
+            return Cursor {
+                leaf: ans.unwrap().into(),
+                offset: 0,
+            };
+        };
+        let leaf = self.leaf_nodes.get_mut(leaf_idx.0).unwrap();
         let parent_idx = leaf.parent();
         let mut is_full = false;
         let ans = if elem.can_merge(&leaf.elem) {
             leaf.elem.merge_left(&elem);
             Cursor {
-                leaf: leaf_idx.unwrap().into(),
+                leaf: leaf_idx,
                 offset: 0,
             }
         } else {
@@ -2423,7 +2431,7 @@ impl<B: BTreeTrait> BTree<B> {
             }
         };
 
-        self.recursive_update_cache(leaf_idx, B::USE_DIFF, None);
+        self.recursive_update_cache(leaf_idx.into(), B::USE_DIFF, None);
         if is_full {
             self.split(parent_idx);
         }

@@ -47,7 +47,7 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
         let end_path = tree.get_path(
             end_result
                 .map(|x| x.leaf.into())
-                .unwrap_or_else(|| tree.last_leaf()),
+                .unwrap_or_else(|| tree.last_leaf().unwrap().into()),
         );
         let leaf_before_drain_range = {
             let node_idx = start_path.last().unwrap().arena;

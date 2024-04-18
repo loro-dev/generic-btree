@@ -1,8 +1,8 @@
 extern crate alloc;
 
-use alloc::string::{String, ToString};
 use core::ops::RangeBounds;
 use std::assert_eq;
+use std::fmt::Display;
 
 use crate::rle::Sliceable;
 use crate::{BTree, BTreeTrait, LeafIndex, LengthFinder, QueryResult};
@@ -254,8 +254,8 @@ impl Default for Rope {
     }
 }
 
-impl ToString for Rope {
-    fn to_string(&self) -> String {
+impl Display for Rope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut ans = Vec::with_capacity(self.len());
         for elem in self.iter() {
             let (left, right) = elem.as_bytes();
@@ -263,7 +263,7 @@ impl ToString for Rope {
             ans.extend_from_slice(right);
         }
 
-        String::from_utf8(ans).unwrap()
+        f.write_str(std::str::from_utf8(ans.as_slice()).unwrap())
     }
 }
 
@@ -3398,9 +3398,9 @@ mod test {
             rope.insert(0, &i.to_string());
         }
 
-        while rope.len() > 0 {
+        while !rope.is_empty() {
             let leaf = rope.tree.first_leaf();
-            rope.tree.update_leaf(leaf.unwrap_leaf().into(), |elem| {
+            rope.tree.update_leaf(leaf.unwrap(), |elem| {
                 elem.slice_(1..1);
                 (true, None, None)
             });

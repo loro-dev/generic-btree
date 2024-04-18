@@ -1,4 +1,4 @@
-use std::{ops::Range, usize};
+use std::ops::Range;
 
 use generic_btree::{
     rle::{HasLength, Mergeable, Sliceable},
@@ -40,10 +40,7 @@ impl RangeNumMap {
     }
 
     pub fn get(&mut self, index: usize) -> Option<isize> {
-        let Some(result) = self.0.query::<LengthFinder>(&index) else {
-            return None;
-        };
-
+        let result = self.0.query::<LengthFinder>(&index)?;
         if !result.found {
             return None;
         }
