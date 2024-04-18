@@ -67,7 +67,6 @@ pub struct BTree<B: BTreeTrait> {
 }
 
 impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for BTree<B> {
-    #[inline]
     fn clone(&self) -> Self {
         Self {
             in_nodes: self.in_nodes.clone(),
@@ -85,7 +84,6 @@ pub struct FindResult {
 }
 
 impl FindResult {
-    #[inline(always)]
     pub fn new_found(index: usize, offset: usize) -> Self {
         Self {
             index,
@@ -94,7 +92,6 @@ impl FindResult {
         }
     }
 
-    #[inline(always)]
     pub fn new_missing(index: usize, offset: usize) -> Self {
         Self {
             index,
@@ -111,7 +108,6 @@ struct Idx {
 }
 
 impl Idx {
-    #[inline(always)]
     pub fn new(arena: ArenaIndex, arr: usize) -> Self {
         Self { arena, arr }
     }
@@ -141,7 +137,6 @@ pub struct QueryResult {
 pub struct LeafIndex(RawArenaIndex);
 
 impl LeafIndex {
-    #[inline(always)]
     pub fn inner(&self) -> RawArenaIndex {
         self.0
     }
@@ -399,12 +394,10 @@ impl<B: BTreeTrait> Clone for Child<B> {
 }
 
 impl<B: BTreeTrait> Child<B> {
-    #[inline(always)]
     pub fn cache(&self) -> &B::Cache {
         &self.cache
     }
 
-    #[inline(always)]
     fn new(arena: ArenaIndex, cache: B::Cache) -> Self {
         Self { arena, cache }
     }
@@ -478,7 +471,6 @@ struct LackInfo {
 }
 
 impl<B: BTreeTrait> BTree<B> {
-    #[inline]
     pub fn new() -> Self {
         let mut arena = Arena::new();
         let root = arena.insert(Node::new());
@@ -500,7 +492,6 @@ impl<B: BTreeTrait> BTree<B> {
     /// Insert new element to the tree.
     ///
     /// Returns (insert_pos, splitted_leaves)
-    #[inline]
     pub fn insert<Q>(&mut self, q: &Q::QueryArg, data: B::Elem) -> (Cursor, SplittedLeaves)
     where
         Q: Query<B>,
@@ -660,7 +651,6 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    #[inline]
     fn alloc_new_leaf(&mut self, leaf: LeafNode<B::Elem>) -> ArenaIndex {
         let arena_index = self.leaf_nodes.insert(leaf);
         ArenaIndex::Leaf(arena_index)
@@ -787,7 +777,6 @@ impl<B: BTreeTrait> BTree<B> {
         Some(path)
     }
 
-    #[inline]
     fn get_leaf_slot(leaf_arena_index: RawArenaIndex, parent: &Node<B>) -> usize {
         parent
             .children
@@ -799,7 +788,6 @@ impl<B: BTreeTrait> BTree<B> {
     /// Query the tree by custom query type
     ///
     /// Return None if the tree is empty
-    #[inline(always)]
     pub fn query<Q>(&self, query: &Q::QueryArg) -> Option<QueryResult>
     where
         Q: Query<B>,
@@ -849,13 +837,11 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    #[inline]
     pub fn get_elem_mut(&mut self, leaf: LeafIndex) -> Option<&mut B::Elem> {
         let node = self.leaf_nodes.get_mut(leaf.0)?;
         Some(&mut node.elem)
     }
 
-    #[inline(always)]
     pub fn get_elem(&self, leaf: LeafIndex) -> Option<&<B as BTreeTrait>::Elem> {
         self.leaf_nodes.get(leaf.0).map(|x| &x.elem)
     }
@@ -1383,7 +1369,6 @@ impl<B: BTreeTrait> BTree<B> {
         new_leaves
     }
 
-    #[inline]
     fn update_root_cache(&mut self) {
         self.in_nodes
             .get(self.root.unwrap_internal())
@@ -1491,12 +1476,10 @@ impl<B: BTreeTrait> BTree<B> {
         })
     }
 
-    #[inline]
     pub fn drain(&mut self, range: Range<QueryResult>) -> iter::Drain<B> {
         iter::Drain::new(self, Some(range.start), Some(range.end))
     }
 
-    #[inline]
     pub fn drain_by_query<Q: Query<B>>(&mut self, range: Range<Q::QueryArg>) -> iter::Drain<B> {
         let start = self.query::<Q>(&range.start);
         let end = self.query::<Q>(&range.end);
@@ -1583,7 +1566,6 @@ impl<B: BTreeTrait> BTree<B> {
         }
     }
 
-    #[inline(always)]
     pub fn range<Q>(&self, range: Range<Q::QueryArg>) -> Option<Range<QueryResult>>
     where
         Q: Query<B>,
@@ -1595,7 +1577,6 @@ impl<B: BTreeTrait> BTree<B> {
         Some(self.query::<Q>(&range.start).unwrap()..self.query::<Q>(&range.end).unwrap())
     }
 
-    #[inline]
     pub fn iter_range(
         &self,
         range: impl RangeBounds<Cursor>,
@@ -1647,7 +1628,6 @@ impl<B: BTreeTrait> BTree<B> {
         })
     }
 
-    #[inline(always)]
     pub fn start_cursor(&self) -> Option<Cursor> {
         Some(Cursor {
             leaf: self.first_leaf()?,
@@ -1655,7 +1635,6 @@ impl<B: BTreeTrait> BTree<B> {
         })
     }
 
-    #[inline(always)]
     pub fn end_cursor(&self) -> Option<Cursor> {
         let leaf = self.last_leaf()?;
         let node = self.get_leaf(leaf.into());
@@ -1669,7 +1648,6 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     // at call site the cache at path can be out-of-date.
     // the cache will be up-to-date after this method
-    #[inline(always)]
     fn split(&mut self, node_idx: ArenaIndex) {
         let (node_parent, node_parent_slot, this_cache, right_child) = self.split_node(node_idx);
 
@@ -1819,17 +1797,17 @@ impl<B: BTreeTrait> BTree<B> {
         self.root_cache = cache;
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_internal_mut(&mut self, index: ArenaIndex) -> &mut Node<B> {
         self.in_nodes.get_mut(index.unwrap_internal()).unwrap()
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_leaf_mut(&mut self, index: ArenaIndex) -> &mut LeafNode<B::Elem> {
         self.leaf_nodes.get_mut(index.unwrap_leaf()).unwrap()
     }
 
-    #[inline(always)]
+    #[inline]
     fn get2_mut(&mut self, a: ArenaIndex, b: ArenaIndex) -> (&mut Node<B>, &mut Node<B>) {
         let (a, b) = self
             .in_nodes
@@ -1840,12 +1818,12 @@ impl<B: BTreeTrait> BTree<B> {
     /// # Panic
     ///
     /// If the given index is not valid or deleted
-    #[inline(always)]
+    #[inline]
     pub fn get_internal(&self, index: ArenaIndex) -> &Node<B> {
         self.in_nodes.get(index.unwrap_internal()).unwrap()
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn get_leaf(&self, index: ArenaIndex) -> &LeafNode<B::Elem> {
         self.leaf_nodes.get(index.unwrap_leaf()).unwrap()
     }
@@ -2806,7 +2784,6 @@ struct SplitInfo {
 }
 
 impl<B: BTreeTrait> Default for BTree<B> {
-    #[inline(always)]
     fn default() -> Self {
         Self::new()
     }

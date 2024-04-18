@@ -26,7 +26,7 @@ pub trait UseLengthFinder<B: BTreeTrait> {
     fn get_len(cache: &B::Cache) -> usize;
 }
 
-impl<Elem: 'static + HasLength + Debug, B: BTreeTrait<Elem = Elem> + UseLengthFinder<B>> Query<B>
+impl<Elem: HasLength + Debug, B: BTreeTrait<Elem = Elem> + UseLengthFinder<B>> Query<B>
     for LengthFinder
 {
     type QueryArg = usize;
