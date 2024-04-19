@@ -2,7 +2,7 @@ use core::fmt::Debug;
 use std::cmp::Ordering;
 use std::ops::Range;
 
-use crate::rle::{HasLength, Mergeable, Sliceable, TryInsert};
+use crate::rle::{CanRemove, HasLength, Mergeable, Sliceable, TryInsert};
 use crate::{BTree, BTreeTrait, FindResult, Query, SplitInfo};
 
 #[derive(Debug)]
@@ -209,6 +209,12 @@ impl<T> Mergeable for Unmergeable<T> {
 impl<T> TryInsert for Unmergeable<T> {
     fn try_insert(&mut self, _pos: usize, elem: Self) -> Result<(), Self> {
         Err(elem)
+    }
+}
+
+impl<T> CanRemove for Unmergeable<T> {
+    fn can_remove(&self) -> bool {
+        false
     }
 }
 

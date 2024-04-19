@@ -9,7 +9,7 @@ use std::{cmp::Ordering, mem::take, ops::RangeBounds};
 use fxhash::{FxHashMap, FxHashSet};
 pub(crate) use heapless::Vec as HeaplessVec;
 use itertools::Itertools;
-use rle::TryInsert;
+use rle::{CanRemove, TryInsert};
 use thunderdome::Arena;
 use thunderdome::Index as RawArenaIndex;
 
@@ -28,9 +28,12 @@ const MAX_CHILDREN_NUM: usize = 12;
 
 /// `Elem` should has length. `offset` in search result should always >= `Elem.rle_len()`
 pub trait BTreeTrait {
-    type Elem: Debug + HasLength + Sliceable + Mergeable + TryInsert;
+    /// Sometime an [Elem] with length of 0, but it's not empty.
+    ///
+    /// The empty [Elem]s are the ones that can be safely ignored.
+    type Elem: Debug + HasLength + Sliceable + Mergeable + TryInsert + CanRemove;
     type Cache: Debug + Default + Clone + Eq;
-    type CacheDiff: Debug + Default;
+    type CacheDiff: Debug + Default + CanRemove;
     // Whether we should use cache diff by default
     const USE_DIFF: bool = true;
 
@@ -1087,7 +1090,7 @@ impl<B: BTreeTrait> BTree<B> {
     /// `f` returns Option<(cache_diff, new_insert_1, new_insert2)>
     ///
     /// - If returned value is `None`, the cache will not be updated.
-    /// - If leaf_node.rle_len() == 0, it will be removed from the tree.
+    /// - If leaf_node.can_remove(), it will be removed from the tree.
     ///
     /// Returns (path, splitted_leaves), if is is still valid after this method. (If the leaf node is removed, the path will be None)
     pub fn update_leaf_by_search<Q: Query<B>>(
@@ -1137,7 +1140,7 @@ impl<B: BTreeTrait> BTree<B> {
         }
 
         // Delete
-        if leaf.elem.rle_len() == 0 {
+        if leaf.elem.can_remove() {
             // handle deletion
             // leaf node should be deleted
             assert!(new_insert_1.is_none());
@@ -1232,7 +1235,7 @@ impl<B: BTreeTrait> BTree<B> {
     ///
     /// `f` returns (is_cache_updated, cache_diff, new_insert_1, new_insert2)
     ///
-    /// - If leaf_node.rle_len() == 0, it will be removed from the tree.
+    /// - If leaf_node.can_remove(), it will be removed from the tree.
     ///
     /// Returns true if the node_idx is still valid. (If the leaf node is removed, it will return false).
     pub fn update_leaf(
@@ -1244,7 +1247,7 @@ impl<B: BTreeTrait> BTree<B> {
         let node = self.leaf_nodes.get_mut(node_idx.0).unwrap();
         let mut parent_idx = node.parent();
         let (need_update_cache, new_insert_1, new_insert_2) = f(&mut node.elem);
-        let deleted = node.elem.rle_len() == 0;
+        let deleted = node.elem.can_remove();
 
         if need_update_cache {
             self.recursive_update_cache(node_idx.into(), B::USE_DIFF, None);

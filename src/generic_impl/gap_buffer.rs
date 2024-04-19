@@ -1,6 +1,6 @@
 use std::ops::{Range, RangeBounds};
 
-use crate::rle::{HasLength, Mergeable, Sliceable, TryInsert};
+use crate::rle::{CanRemove, HasLength, Mergeable, Sliceable, TryInsert};
 
 #[cfg(not(test))]
 pub const MAX_STRING_SIZE: usize = 128;
@@ -246,6 +246,12 @@ impl TryInsert for GapBuffer {
         let pair = elem.as_bytes();
         self.insert_bytes_pair(pos, pair).unwrap();
         Ok(())
+    }
+}
+
+impl CanRemove for GapBuffer {
+    fn can_remove(&self) -> bool {
+        self.len() == 0
     }
 }
 

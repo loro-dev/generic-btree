@@ -109,3 +109,33 @@ pub trait TryInsert {
     where
         Self: Sized;
 }
+
+pub trait CanRemove {
+    fn can_remove(&self) -> bool;
+}
+
+impl CanRemove for () {
+    fn can_remove(&self) -> bool {
+        true
+    }
+}
+impl CanRemove for usize {
+    fn can_remove(&self) -> bool {
+        *self == 0
+    }
+}
+impl CanRemove for isize {
+    fn can_remove(&self) -> bool {
+        *self == 0
+    }
+}
+impl CanRemove for u32 {
+    fn can_remove(&self) -> bool {
+        *self == 0
+    }
+}
+impl CanRemove for i32 {
+    fn can_remove(&self) -> bool {
+        *self == 0
+    }
+}

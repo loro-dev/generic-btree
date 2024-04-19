@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use generic_btree::{
-    rle::{HasLength, Mergeable, Sliceable, TryInsert},
+    rle::{CanRemove, HasLength, Mergeable, Sliceable, TryInsert},
     BTree, BTreeTrait, LengthFinder, UseLengthFinder,
 };
 
@@ -162,6 +162,12 @@ impl TryInsert for Elem {
         Self: Sized,
     {
         Err(elem)
+    }
+}
+
+impl CanRemove for Elem {
+    fn can_remove(&self) -> bool {
+        self.len == 0
     }
 }
 
