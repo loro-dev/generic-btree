@@ -1,29 +1,25 @@
 use std::ops::{Range, RangeBounds};
 
-use crate::rle::{HasLength, Mergeable, Sliceable};
+use crate::rle::{HasLength, Mergeable, Sliceable, TryInsert};
+
+#[cfg(not(test))]
+pub const MAX_STRING_SIZE: usize = 128;
+#[cfg(test)]
+pub const MAX_STRING_SIZE: usize = 12;
 
 #[derive(Debug, Clone)]
 pub(super) struct GapBuffer {
-    buffer: Vec<u8>,
+    buffer: [u8; MAX_STRING_SIZE],
     gap_start: u16,
     gap_len: u16,
 }
 
-#[allow(unused)]
 impl GapBuffer {
     pub fn new() -> Self {
         Self {
-            buffer: vec![0; 64],
+            buffer: [0; MAX_STRING_SIZE],
             gap_start: 0,
-            gap_len: 64,
-        }
-    }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            buffer: vec![0; capacity],
-            gap_start: 0,
-            gap_len: capacity as u16,
+            gap_len: MAX_STRING_SIZE as u16,
         }
     }
 
@@ -51,24 +47,50 @@ impl GapBuffer {
         }
     }
 
-    pub fn push(&mut self, value: u8) {
-        self.reserve(1);
+    #[allow(unused)]
+    pub fn push(&mut self, value: u8) -> Result<(), ()> {
+        if self.gap_len == 0 {
+            return Err(());
+        }
         self.buffer[self.gap_start as usize] = value;
         self.gap_start += 1;
         self.gap_len -= 1;
+        Ok(())
     }
 
     #[inline(always)]
-    pub fn push_bytes(&mut self, bytes: &[u8]) {
-        self.insert_bytes(self.len(), bytes);
+    pub fn push_bytes(&mut self, bytes: &[u8]) -> Result<(), ()> {
+        self.insert_bytes(self.len(), bytes)
     }
 
-    pub fn insert_bytes(&mut self, index: usize, bytes: &[u8]) {
-        self.reserve(bytes.len());
+    pub fn insert_bytes(&mut self, index: usize, bytes: &[u8]) -> Result<(), ()> {
+        if (self.gap_len as usize) < bytes.len() {
+            return Err(());
+        }
+
         self.shift_at(index);
         self.buffer[index..index + bytes.len()].copy_from_slice(bytes);
         self.gap_start += bytes.len() as u16;
         self.gap_len -= bytes.len() as u16;
+        Ok(())
+    }
+
+    pub fn insert_bytes_pair(
+        &mut self,
+        index: usize,
+        (left, right): (&[u8], &[u8]),
+    ) -> Result<(), ()> {
+        let len = left.len() + right.len();
+        if (self.gap_len as usize) < len {
+            return Err(());
+        }
+
+        self.shift_at(index);
+        self.buffer[index..index + left.len()].copy_from_slice(left);
+        self.buffer[index + left.len()..index + len].copy_from_slice(right);
+        self.gap_start += len as u16;
+        self.gap_len -= len as u16;
+        Ok(())
     }
 
     pub fn delete(&mut self, range: impl RangeBounds<usize>) {
@@ -95,28 +117,6 @@ impl GapBuffer {
         self.gap_len += len as u16;
     }
 
-    fn reserve(&mut self, len: usize) {
-        if self.gap_len >= len as u16 {
-            return;
-        }
-
-        let gap_end = (self.gap_start + self.gap_len) as usize;
-        let old_buffer_len = self.buffer.len();
-
-        self.buffer.reserve(len - self.gap_len as usize);
-        let len = self.len();
-        let cap = self.buffer.capacity();
-        let new_gap_len = cap as u16 - len as u16;
-        let new_gap_end = self.gap_start as usize + new_gap_len as usize;
-        for _ in 0..(cap - self.buffer.len()) {
-            self.buffer.push(0);
-        }
-
-        self.buffer
-            .copy_within(gap_end..old_buffer_len, new_gap_end);
-        self.gap_len = new_gap_len;
-    }
-
     #[inline]
     pub fn capacity(&self) -> usize {
         self.buffer.len()
@@ -134,6 +134,7 @@ impl GapBuffer {
         )
     }
 
+    #[allow(unused)]
     pub fn to_vec(&self) -> Vec<u8> {
         let mut vec = Vec::with_capacity(self.len());
         let (left, right) = self.as_bytes();
@@ -142,10 +143,20 @@ impl GapBuffer {
         vec
     }
 
-    pub(crate) fn from_str(elem: &str) -> GapBuffer {
-        let mut gb = GapBuffer::with_capacity(elem.len().max(16));
-        gb.push_bytes(elem.as_bytes());
-        gb
+    pub(crate) fn from_str(elem: &str) -> impl Iterator<Item = GapBuffer> + '_ {
+        let mut i = 0;
+        let elem = elem.as_bytes();
+        std::iter::from_fn(move || {
+            if i >= elem.len() {
+                return None;
+            }
+
+            let mut gb = GapBuffer::new();
+            gb.push_bytes(&elem[i..(i + MAX_STRING_SIZE).min(elem.len())])
+                .unwrap();
+            i += MAX_STRING_SIZE;
+            Some(gb)
+        })
     }
 }
 
@@ -163,10 +174,11 @@ impl Sliceable for GapBuffer {
 
         let (l, r) = self.as_bytes();
         if start < l.len() {
-            gb.push_bytes(&l[start..end.min(l.len())]);
+            gb.push_bytes(&l[start..end.min(l.len())]).unwrap();
         }
         if end > l.len() {
-            gb.push_bytes(&r[start.saturating_sub(l.len())..end.saturating_sub(l.len())]);
+            gb.push_bytes(&r[start.saturating_sub(l.len())..end.saturating_sub(l.len())])
+                .unwrap();
         }
 
         debug_assert_eq!(gb.len(), end - start);
@@ -199,8 +211,8 @@ impl Sliceable for GapBuffer {
     {
         self.shift_at(pos);
         let right = self.as_bytes().1;
-        let mut r = Self::with_capacity(right.len().max(64));
-        r.push_bytes(right);
+        let mut r = Self::new();
+        r.push_bytes(right).unwrap();
         self.gap_len = (self.capacity() - pos) as u16;
         r
     }
@@ -208,31 +220,32 @@ impl Sliceable for GapBuffer {
 
 impl Mergeable for GapBuffer {
     fn can_merge(&self, rhs: &Self) -> bool {
-        self.len() + rhs.len() < 128
+        self.len() + rhs.len() <= MAX_STRING_SIZE
     }
 
     fn merge_right(&mut self, rhs: &Self) {
-        let (a, b) = rhs.as_bytes();
-        self.push_bytes(a);
-        self.push_bytes(b);
+        let pair = rhs.as_bytes();
+        self.insert_bytes_pair(self.len(), pair).unwrap();
     }
 
     fn merge_left(&mut self, left: &Self) {
-        let (a, b) = left.as_bytes();
-        self.insert_bytes(0, a);
-        self.insert_bytes(0, b);
+        let pair = left.as_bytes();
+        self.insert_bytes_pair(0, pair).unwrap();
     }
 }
 
-impl<'a> From<&'a str> for GapBuffer {
-    fn from(value: &'a str) -> Self {
-        Self::from_str(value)
-    }
-}
+impl TryInsert for GapBuffer {
+    fn try_insert(&mut self, pos: usize, elem: Self) -> Result<(), Self>
+    where
+        Self: Sized,
+    {
+        if self.len() + elem.len() > MAX_STRING_SIZE {
+            return Err(elem);
+        }
 
-impl From<String> for GapBuffer {
-    fn from(value: String) -> Self {
-        Self::from_str(&value)
+        let pair = elem.as_bytes();
+        self.insert_bytes_pair(pos, pair).unwrap();
+        Ok(())
     }
 }
 
@@ -242,15 +255,15 @@ mod test {
 
     #[test]
     fn basic() {
-        let mut gb = GapBuffer::new();
-        gb.insert_bytes(0, &[3, 8]);
+        let mut gb: GapBuffer = GapBuffer::new();
+        gb.insert_bytes(0, &[3, 8]).unwrap();
         assert_eq!(gb.to_vec(), vec![3, 8]);
-        gb.insert_bytes(1, &[4, 5, 6]);
+        gb.insert_bytes(1, &[4, 5, 6]).unwrap();
         assert_eq!(gb.to_vec(), vec![3, 4, 5, 6, 8]);
         assert_eq!(gb.len(), 5);
-        gb.insert_bytes(4, &[7]);
+        gb.insert_bytes(4, &[7]).unwrap();
         assert_eq!(gb.to_vec(), vec![3, 4, 5, 6, 7, 8]);
-        gb.insert_bytes(0, &[1, 2, 9, 9]);
+        gb.insert_bytes(0, &[1, 2, 9, 9]).unwrap();
         assert_eq!(gb.to_vec(), vec![1, 2, 9, 9, 3, 4, 5, 6, 7, 8]);
         gb.delete(2..4);
         assert_eq!(gb.len(), 8);
@@ -263,7 +276,7 @@ mod test {
     #[test]
     fn slice() {
         let mut gb = GapBuffer::new();
-        gb.push_bytes(&[0, 1, 2, 3, 4, 5, 6, 7]);
+        gb.push_bytes(&[0, 1, 2, 3, 4, 5, 6, 7]).unwrap();
         gb.shift_at(5);
         let b = gb.slice(2..5);
         assert_eq!(b.to_vec(), vec![2, 3, 4]);

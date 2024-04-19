@@ -4,13 +4,12 @@ use core::ops::RangeBounds;
 use std::assert_eq;
 use std::fmt::Display;
 
+use crate::generic_impl::gap_buffer::MAX_STRING_SIZE;
 use crate::rle::Sliceable;
 use crate::{BTree, BTreeTrait, LeafIndex, LengthFinder, QueryResult};
 
 use super::gap_buffer::GapBuffer;
 use super::len_finder::UseLengthFinder;
-
-const MAX_LEN: usize = 256;
 
 #[derive(Debug)]
 struct RopeTrait;
@@ -52,7 +51,9 @@ impl Rope {
         }
 
         if self.is_empty() {
-            self.tree.push(GapBuffer::from_str(elem));
+            for chunk in GapBuffer::from_str(elem) {
+                self.tree.push(chunk);
+            }
             return;
         }
 
@@ -60,19 +61,20 @@ impl Rope {
             if pos <= index {
                 let node = self.tree.leaf_nodes.get(leaf.0).unwrap();
                 if index <= pos + node.elem.len() {
+                    let mut success = true;
                     let offset = index - pos;
                     let valid = self
                         .tree
                         .update_leaf(leaf, |leaf| {
-                            if leaf.len() + elem.len() < MAX_LEN.max(leaf.capacity()) {
-                                leaf.insert_bytes(offset, elem.as_bytes());
+                            if leaf.len() + elem.len() < MAX_STRING_SIZE {
+                                leaf.insert_bytes(offset, elem.as_bytes()).unwrap();
                                 (true, None, None)
                             } else {
                                 let mut right = leaf.split(offset);
-                                if leaf.len() + elem.len() < MAX_LEN {
-                                    leaf.push_bytes(elem.as_bytes());
+                                if leaf.len() + elem.len() < MAX_STRING_SIZE {
+                                    success = leaf.push_bytes(elem.as_bytes()).is_ok();
                                 } else {
-                                    right.insert_bytes(0, elem.as_bytes());
+                                    success = right.insert_bytes(0, elem.as_bytes()).is_ok();
                                 }
 
                                 (true, Some(right), None)
@@ -84,32 +86,36 @@ impl Rope {
                         self.cursor = None;
                     }
 
-                    return;
+                    if success {
+                        return;
+                    }
                 }
             }
         }
 
-        let q = self
-            .tree
-            .update_leaf_by_search::<LengthFinder>(&index, |leaf, pos| {
-                if leaf.len() + elem.len() < MAX_LEN.max(leaf.capacity()) {
-                    leaf.insert_bytes(pos.cursor().offset, elem.as_bytes());
-                    Some((elem.len() as isize, None, None))
+        let (q, f) = self.tree.query_with_finder_return::<LengthFinder>(&index);
+        self.cursor = q.and_then(|q| {
+            if q.offset() == 0 {
+                if f.slot == 0 || f.parent.is_none() {
+                    None
                 } else {
-                    let mut right = leaf.split(pos.cursor.offset);
-                    if leaf.len() + elem.len() < MAX_LEN {
-                        leaf.push_bytes(elem.as_bytes());
-                    } else {
-                        right.insert_bytes(0, elem.as_bytes());
-                    }
-
-                    Some((elem.len() as isize, Some(right), None))
+                    let node = self.tree.in_nodes.get(f.parent.unwrap()).unwrap();
+                    let child = &node.children[f.slot as usize - 1];
+                    Some(Cursor {
+                        pos: index - child.cache as usize,
+                        leaf: child.arena.unwrap().into(),
+                    })
                 }
-            });
-        self.cursor = q.0.map(|q| Cursor {
-            pos: index - q.offset,
-            leaf: q.leaf,
+            } else {
+                Some(Cursor {
+                    pos: index - q.offset(),
+                    leaf: q.leaf(),
+                })
+            }
         });
+
+        self.tree
+            .insert_many_by_cursor(q.map(|x| x.cursor), GapBuffer::from_str(elem));
     }
 
     pub fn delete_range(&mut self, range: impl RangeBounds<usize>) {
@@ -400,6 +406,18 @@ mod test {
     }
 
     #[test]
+    fn test_insert_many() {
+        let mut rope = Rope::new();
+        let s = "_12345678_".repeat(10);
+        let mut expected = String::new();
+        for i in 0..100 {
+            expected.insert_str(i, &s);
+            rope.insert(i, &s);
+            assert_eq!(&rope.to_string(), &expected)
+        }
+    }
+
+    #[test]
     fn test_repeat_insert() {
         let mut rope = Rope::new();
         rope.insert(0, "123");
@@ -435,8 +453,11 @@ mod test {
                 Action::Insert { pos, content } => {
                     let pos = pos as usize % (truth.len() + 1);
                     let s = content.to_string();
+                    dbg!("INS", pos, &s);
+                    dbg!(&rope);
                     truth.insert_str(pos, &s);
                     rope.insert(pos, &s);
+                    dbg!(&rope);
                     rope.check();
                     assert_eq!(rope.len(), truth.len());
                     assert_eq!(rope.to_string(), truth, "{:#?}", &rope.tree);
@@ -445,10 +466,14 @@ mod test {
                     let pos = pos as usize % (truth.len() + 1);
                     let mut len = len as usize % 10;
                     len = len.min(truth.len() - pos);
+                    dbg!("DEL", pos, len);
+                    dbg!(&rope);
                     rope.delete_range(pos..(pos + len));
+                    dbg!(&rope);
                     truth.drain(pos..pos + len);
                     rope.check();
                     assert_eq!(rope.len(), truth.len());
+                    assert_eq!(rope.to_string(), truth, "{:#?}", &rope.tree);
                 }
             }
         }
@@ -3368,8 +3393,8 @@ mod test {
     fn from_str() {
         for i in 0..100000 {
             let s = i.to_string();
-            let g = GapBuffer::from_str(&s);
-            assert_eq!(s.len(), g.len());
+            let mut g = GapBuffer::from_str(&s);
+            assert_eq!(s.len(), g.next().unwrap().len());
         }
     }
 
@@ -3381,7 +3406,10 @@ mod test {
         }
 
         let rope = Rope {
-            tree: v.iter().map(|x| x.as_str()).collect(),
+            tree: v
+                .iter()
+                .flat_map(|x| GapBuffer::from_str(x.as_str()))
+                .collect(),
             cursor: None,
         };
 

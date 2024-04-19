@@ -1,17 +1,25 @@
 use std::fmt::Debug;
 
+use thunderdome::Index;
+
 use crate::rle::HasLength;
 use crate::{BTreeTrait, FindResult, Query};
 
 /// A generic length finder
 pub struct LengthFinder {
     pub left: usize,
+    pub slot: u8,
+    pub parent: Option<Index>,
 }
 
 impl LengthFinder {
     #[inline(always)]
     pub fn new() -> Self {
-        Self { left: 0 }
+        Self {
+            left: 0,
+            slot: 0,
+            parent: None,
+        }
     }
 }
 
@@ -33,7 +41,11 @@ impl<Elem: HasLength + Debug, B: BTreeTrait<Elem = Elem> + UseLengthFinder<B>> Q
 
     #[inline(always)]
     fn init(target: &Self::QueryArg) -> Self {
-        Self { left: *target }
+        Self {
+            left: *target,
+            slot: 0,
+            parent: None,
+        }
     }
 
     #[inline(always)]
@@ -43,17 +55,28 @@ impl<Elem: HasLength + Debug, B: BTreeTrait<Elem = Elem> + UseLengthFinder<B>> Q
         child_caches: &[crate::Child<B>],
     ) -> crate::FindResult {
         let mut last_left = self.left;
+        let is_internal = child_caches.first().unwrap().is_internal();
         for (i, cache) in child_caches.iter().enumerate() {
             let len = B::get_len(&cache.cache);
             if self.left >= len {
                 last_left = self.left;
                 self.left -= len;
             } else {
+                if is_internal {
+                    self.parent = Some(cache.arena.unwrap());
+                } else {
+                    self.slot = i as u8;
+                }
                 return FindResult::new_found(i, self.left);
             }
         }
 
         self.left = last_left;
+        if is_internal {
+            self.parent = Some(child_caches.last().unwrap().arena.unwrap());
+        } else {
+            self.slot = child_caches.len() as u8 - 1;
+        }
         FindResult::new_missing(child_caches.len() - 1, last_left)
     }
 

@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use generic_btree::{
-    rle::{HasLength, Mergeable, Sliceable},
+    rle::{HasLength, Mergeable, Sliceable, TryInsert},
     BTree, BTreeTrait, LengthFinder, UseLengthFinder,
 };
 
@@ -153,6 +153,15 @@ impl Sliceable for Elem {
         };
 
         self.len = len;
+    }
+}
+
+impl TryInsert for Elem {
+    fn try_insert(&mut self, _: usize, elem: Self) -> Result<(), Self>
+    where
+        Self: Sized,
+    {
+        Err(elem)
     }
 }
 

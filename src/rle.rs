@@ -103,3 +103,9 @@ pub trait Mergeable {
 pub trait HasLength {
     fn rle_len(&self) -> usize;
 }
+
+pub trait TryInsert {
+    fn try_insert(&mut self, pos: usize, elem: Self) -> Result<(), Self>
+    where
+        Self: Sized;
+}

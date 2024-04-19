@@ -9,6 +9,7 @@ use std::{cmp::Ordering, mem::take, ops::RangeBounds};
 use fxhash::{FxHashMap, FxHashSet};
 pub(crate) use heapless::Vec as HeaplessVec;
 use itertools::Itertools;
+use rle::TryInsert;
 use thunderdome::Arena;
 use thunderdome::Index as RawArenaIndex;
 
@@ -23,11 +24,11 @@ pub mod rle;
 
 pub type HeapVec<T> = Vec<T>;
 
-const MAX_CHILDREN_NUM: usize = 16;
+const MAX_CHILDREN_NUM: usize = 12;
 
 /// `Elem` should has length. `offset` in search result should always >= `Elem.rle_len()`
 pub trait BTreeTrait {
-    type Elem: Debug + HasLength + Sliceable + Mergeable;
+    type Elem: Debug + HasLength + Sliceable + Mergeable + TryInsert;
     type Cache: Debug + Default + Clone + Eq;
     type CacheDiff: Debug + Default;
     // Whether we should use cache diff by default
@@ -515,38 +516,43 @@ impl<B: BTreeTrait> BTree<B> {
 
         let mut is_full = false;
         let mut splitted: SplittedLeaves = Default::default();
-        // Try to merge
-        let ans = if cursor.offset == 0 && data.can_merge(&leaf.elem) {
-            leaf.elem.merge_left(&data);
-            Cursor {
-                leaf: index,
-                offset: 0,
-            }
-        } else if cursor.offset == leaf.elem.rle_len() && leaf.elem.can_merge(&data) {
-            let offset = leaf.elem.rle_len();
-            leaf.elem.merge_right(&data);
-            Cursor {
-                leaf: index,
-                offset,
-            }
-        } else {
-            // Insert new leaf node
-            let SplitInfo {
-                parent_idx: parent_index,
-                insert_slot: insert_index,
-                new_leaf,
-                ..
-            } = self.split_leaf_if_needed(cursor);
-            parent_idx = ArenaIndex::Internal(parent_index);
-            let child = self.alloc_leaf_child(data, parent_index);
-            let ans = child.arena;
-            splitted.push_option(new_leaf);
-            let parent = self.in_nodes.get_mut(parent_index).unwrap();
-            parent.children.insert(insert_index, child).unwrap();
-            is_full = parent.is_full();
-            Cursor {
-                leaf: ans.unwrap().into(),
-                offset: 0,
+        let ans = match leaf.elem.try_insert(cursor.offset, data) {
+            Ok(_) => cursor,
+            Err(data) => {
+                // Try to merge
+                if cursor.offset == 0 && data.can_merge(&leaf.elem) {
+                    leaf.elem.merge_left(&data);
+                    Cursor {
+                        leaf: index,
+                        offset: 0,
+                    }
+                } else if cursor.offset == leaf.elem.rle_len() && leaf.elem.can_merge(&data) {
+                    let offset = leaf.elem.rle_len();
+                    leaf.elem.merge_right(&data);
+                    Cursor {
+                        leaf: index,
+                        offset,
+                    }
+                } else {
+                    // Insert new leaf node
+                    let SplitInfo {
+                        parent_idx: parent_index,
+                        insert_slot: insert_index,
+                        new_leaf,
+                        ..
+                    } = self.split_leaf_if_needed(cursor);
+                    parent_idx = ArenaIndex::Internal(parent_index);
+                    let child = self.alloc_leaf_child(data, parent_index);
+                    let ans = child.arena;
+                    splitted.push_option(new_leaf);
+                    let parent = self.in_nodes.get_mut(parent_index).unwrap();
+                    parent.children.insert(insert_index, child).unwrap();
+                    is_full = parent.is_full();
+                    Cursor {
+                        leaf: ans.unwrap().into(),
+                        offset: 0,
+                    }
+                }
             }
         };
 
@@ -588,6 +594,11 @@ impl<B: BTreeTrait> BTree<B> {
             .iter()
             .position(|x| x.arena.unwrap() == pos.leaf.0)
             .unwrap();
+        let left_neighbour = if leaf_slot == 0 {
+            None
+        } else {
+            Some(parent.children[leaf_slot - 1].arena.unwrap().into())
+        };
         let insert_pos = if pos.offset == 0 {
             leaf_slot
         } else if pos.offset == leaf.elem.rle_len() {
@@ -644,6 +655,7 @@ impl<B: BTreeTrait> BTree<B> {
         };
 
         SplitInfo {
+            left_neighbour,
             new_pos,
             parent_idx,
             insert_slot: insert_pos,
@@ -659,78 +671,145 @@ impl<B: BTreeTrait> BTree<B> {
     /// Insert many elements into the tree at once
     ///
     /// It will invoke [`BTreeTrait::insert_batch`]
-    ///
-    /// NOTE: Currently this method don't guarantee balance
     pub fn insert_many_by_cursor(
         &mut self,
         cursor: Option<Cursor>,
-        data: Vec<B::Elem>,
-    ) -> SplittedLeaves
-    where
-        B::Elem: Clone,
-    {
+        mut data_iter: impl Iterator<Item = B::Elem>,
+    ) {
+        let Some(first) = data_iter.next() else {
+            return;
+        };
+
+        let Some(second) = data_iter.next() else {
+            if let Some(c) = cursor {
+                self.insert_by_path(c, first);
+                return;
+            } else {
+                self.push(first);
+                return;
+            }
+        };
+
+        let mut data = Vec::with_capacity(data_iter.size_hint().0 + 2);
+        data.push(first);
+        data.push(second);
+        for elem in data_iter {
+            data.push(elem);
+        }
+
+        merge_adj(&mut data);
+        if data.len() == 1 {
+            if let Some(c) = cursor {
+                self.insert_by_path(c, data.pop().unwrap());
+                return;
+            } else {
+                self.push(data.pop().unwrap());
+                return;
+            }
+        }
+
         if cursor.is_none() {
             assert!(self.is_empty());
-            // Insert directly under root node
-            let children = data
-                .into_iter()
-                .map(|elem| {
+            let (new_root, _) = self.create_subtrees_from_elem(data);
+            self.in_nodes.remove(self.root.unwrap()).unwrap();
+            self.root = new_root;
+            return;
+        }
+
+        // dbg!(cursor, &data);
+        // dbg!(&self);
+        let cursor = cursor.unwrap();
+        let SplitInfo {
+            new_pos,
+            left_neighbour,
+            ..
+        } = self.split_leaf_if_needed(cursor);
+        let mut inserted = 0;
+        if let Some(left) = left_neighbour {
+            let left_node = self.leaf_nodes.get_mut(left.0).unwrap();
+            let mut i = 0;
+            while i < data.len() && left_node.elem.can_merge(&data[i]) {
+                left_node.elem.merge_right(&data[i]);
+                i += 1;
+            }
+
+            self.recursive_update_cache(left.into(), B::USE_DIFF, None);
+            inserted = i;
+        }
+
+        let mut pos = new_pos.unwrap_or(cursor);
+        // TODO: PERF this can be optimized further
+        for item in data.drain(inserted..).rev() {
+            let (p, _) = self.insert_by_path(pos, item);
+            pos = p
+        }
+    }
+
+    /// The returned height starts from 0. Leaf level is 0.
+    ///
+    /// Returns (newly created subtree's root, height)
+    fn create_subtrees_from_elem(&mut self, data: Vec<B::Elem>) -> (ArenaIndex, usize) {
+        let mut height = 0;
+        let mut nodes = Vec::with_capacity(data.len() / MAX_CHILDREN_NUM + 1);
+        for elem in data.into_iter().chunks(MAX_CHILDREN_NUM).into_iter() {
+            let parent_index = self.in_nodes.insert(Node {
+                parent: None,
+                parent_slot: 0,
+                children: Default::default(),
+            });
+
+            nodes.push(parent_index);
+            let parent = self.in_nodes.get_mut(parent_index).unwrap();
+            for (i, elem) in elem.enumerate() {
+                let leaf = {
+                    // alloc new leaf child
                     let elem_cache = B::get_elem_cache(&elem);
-                    let new_leaf_index = self.alloc_new_leaf(LeafNode {
-                        elem,
-                        parent: self.root.unwrap(),
-                    });
+                    let new_leaf_index = {
+                        let leaf = LeafNode {
+                            elem,
+                            parent: parent_index,
+                        };
+                        let arena_index = self.leaf_nodes.insert(leaf);
+                        ArenaIndex::Leaf(arena_index)
+                    };
                     Child {
                         arena: new_leaf_index,
                         cache: elem_cache,
                     }
-                })
-                .collect();
-
-            let root = self.in_nodes.get_mut(self.root.unwrap()).unwrap();
-            root.children = children;
-            B::calc_cache_internal(&mut self.root_cache, &root.children);
-            return Default::default();
-        }
-
-        let cursor = cursor.unwrap();
-        // FIXME: array overflow
-        let SplitInfo {
-            parent_idx: parent_index,
-            insert_slot: insert_index,
-            new_leaf,
-            ..
-        } = self.split_leaf_if_needed(cursor);
-        let mut splitted = SplittedLeaves::default();
-        splitted.push_option(new_leaf);
-        let parent = self.in_nodes.get_mut(parent_index).unwrap();
-        let mut children = HeaplessVec::from_slice(&parent.children[..insert_index]).unwrap();
-        for child in data.into_iter().map(|elem| {
-            let elem_cache = B::get_elem_cache(&elem);
-            let new_leaf_index = self.alloc_new_leaf(LeafNode {
-                elem,
-                parent: parent_index,
-            });
-            Child {
-                arena: new_leaf_index,
-                cache: elem_cache,
+                };
+                parent.children[i] = leaf;
             }
-        }) {
-            children.push(child).unwrap();
         }
 
-        let parent = self.in_nodes.get_mut(parent_index).unwrap();
-        children
-            .extend_from_slice(&parent.children[insert_index..])
-            .unwrap();
-        parent.children = children;
-        let is_full = parent.is_full();
-        self.recursive_update_cache(cursor.leaf.into(), B::USE_DIFF, None);
-        if is_full {
-            self.split(ArenaIndex::Internal(parent_index));
+        while nodes.len() > 1 {
+            let mut new_nodes = Vec::with_capacity(nodes.len() / MAX_CHILDREN_NUM + 1);
+            for chunk in nodes.into_iter().chunks(MAX_CHILDREN_NUM).into_iter() {
+                let parent_index = self.in_nodes.insert(Node {
+                    parent: None,
+                    parent_slot: 0,
+                    children: Default::default(),
+                });
+
+                new_nodes.push(parent_index);
+                for (i, child_idx) in chunk.enumerate() {
+                    let (parent, child) = self.in_nodes.get2_mut(parent_index, child_idx);
+                    let parent = parent.unwrap();
+                    let child = child.unwrap();
+                    let mut cache = B::Cache::default();
+                    B::calc_cache_internal(&mut cache, &child.children);
+                    parent.children[i] = Child {
+                        arena: ArenaIndex::Internal(child_idx),
+                        cache,
+                    };
+                    child.parent = Some(ArenaIndex::Internal(parent_index));
+                    child.parent_slot = i as u8;
+                }
+            }
+            nodes = new_nodes;
+            height += 1;
         }
-        // TODO: tree may still be unbalanced
-        splitted
+
+        (ArenaIndex::Internal(nodes[0]), height)
     }
 
     /// Shift by offset 1.
@@ -1128,7 +1207,7 @@ impl<B: BTreeTrait> BTree<B> {
                         self.update_children_parent_slot_from(parent_idx, child_arr_pos + 1);
                     }
                     if is_full {
-                        let (_, _, this_cache, right_child) = self.split_node(parent_idx);
+                        let (_, _, this_cache, right_child) = self.split_node(parent_idx, None);
                         new_cache_and_child = Some((this_cache, right_child));
                     }
                 }
@@ -1649,7 +1728,12 @@ impl<B: BTreeTrait> BTree<B> {
     // at call site the cache at path can be out-of-date.
     // the cache will be up-to-date after this method
     fn split(&mut self, node_idx: ArenaIndex) {
-        let (node_parent, node_parent_slot, this_cache, right_child) = self.split_node(node_idx);
+        self.split_at(node_idx, None)
+    }
+
+    fn split_at(&mut self, node_idx: ArenaIndex, at: Option<usize>) {
+        let (node_parent, node_parent_slot, this_cache, right_child) =
+            self.split_node(node_idx, at);
 
         self.inner_insert_node(
             node_parent,
@@ -1663,6 +1747,7 @@ impl<B: BTreeTrait> BTree<B> {
     fn split_node(
         &mut self,
         node_idx: ArenaIndex,
+        at: Option<usize>,
     ) -> (Option<ArenaIndex>, u8, <B as BTreeTrait>::Cache, Child<B>) {
         let node = self.in_nodes.get_mut(node_idx.unwrap_internal()).unwrap();
         let node_parent = node.parent;
@@ -1674,7 +1759,7 @@ impl<B: BTreeTrait> BTree<B> {
         };
 
         // split
-        let split = node.children.len() / 2;
+        let split = at.unwrap_or(node.children.len() / 2);
         let right_children = HeaplessVec::from_slice(&node.children[split..]).unwrap();
         delete_range(&mut node.children, split..);
 
@@ -2561,6 +2646,32 @@ impl<B: BTreeTrait> BTree<B> {
     }
 }
 
+fn merge_adj<E: Mergeable + Debug>(data: &mut Vec<E>) {
+    // Merge adjacent elements
+    let mut i = 0;
+    let last = data.len() - 1;
+    let mut to_delete_start = 0;
+    let mut del_len = 0;
+    while i < last {
+        if data[i].can_merge(&data[i + 1]) {
+            let (a, b) = arref::mut_twice(data.as_mut_slice(), i, i + 1).unwrap();
+            a.merge_right(b);
+            if del_len == 0 {
+                to_delete_start = i + 1;
+            }
+
+            data.swap(i + 1, to_delete_start + del_len);
+            del_len += 1;
+            i += 1;
+        }
+        i += 1;
+    }
+
+    if del_len > 0 {
+        data.drain(to_delete_start..to_delete_start + del_len);
+    }
+}
+
 pub enum PreviousCache<'a, B: BTreeTrait> {
     NodeCache(&'a B::Cache),
     PrevSiblingElem(&'a B::Elem),
@@ -2778,6 +2889,7 @@ impl<B: BTreeTrait, T: Into<B::Elem>> FromIterator<T> for BTree<B> {
 
 struct SplitInfo {
     new_pos: Option<Cursor>,
+    left_neighbour: Option<LeafIndex>,
     parent_idx: RawArenaIndex,
     insert_slot: usize,
     new_leaf: Option<ArenaIndex>,
