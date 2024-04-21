@@ -1637,12 +1637,15 @@ impl<B: BTreeTrait> BTree<B> {
         let mut index = self.root;
         let mut node = self.in_nodes.get(index.unwrap_internal()).unwrap();
         loop {
-            index = node.children[0].arena;
-            if matches!(index, ArenaIndex::Leaf(_)) {
-                return Some(index.unwrap_leaf().into());
-            };
-
-            node = self.in_nodes.get(index.unwrap_internal()).unwrap();
+            index = node.children.first()?.arena;
+            match index {
+                ArenaIndex::Leaf(leaf) => {
+                    return Some(leaf.into());
+                }
+                ArenaIndex::Internal(index) => {
+                    node = self.in_nodes.get(index).unwrap();
+                }
+            }
         }
     }
 
@@ -1651,11 +1654,14 @@ impl<B: BTreeTrait> BTree<B> {
         let mut node = self.in_nodes.get(index.unwrap_internal()).unwrap();
         loop {
             index = node.children.last()?.arena;
-            if matches!(index, ArenaIndex::Leaf(_)) {
-                return Some(index.unwrap_leaf().into());
-            };
-
-            node = self.in_nodes.get(index.unwrap_internal()).unwrap();
+            match index {
+                ArenaIndex::Leaf(leaf) => {
+                    return Some(leaf.into());
+                }
+                ArenaIndex::Internal(index) => {
+                    node = self.in_nodes.get(index).unwrap();
+                }
+            }
         }
     }
 
