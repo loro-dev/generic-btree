@@ -1010,6 +1010,7 @@ impl<B: BTreeTrait> BTree<B> {
         let start_leaf = start.leaf;
         let mut path = self.get_path(start_leaf.into());
         let mut dirty_map: LeafDirtyMap<B::CacheDiff> = FxHashMap::default();
+        let mut to_remove = Vec::default();
 
         loop {
             let current_leaf = path.last().unwrap();
@@ -1024,6 +1025,10 @@ impl<B: BTreeTrait> BTree<B> {
                 .get_mut(current_leaf.arena.unwrap_leaf())
                 .unwrap();
             let cache_diff = f(&mut node.elem);
+            if node.elem.can_remove() {
+                to_remove.push(current_leaf.arena);
+            }
+
             if let Some(diff) = cache_diff {
                 add_leaf_dirty_map(current_leaf.arena, &mut dirty_map, diff);
             }
@@ -1042,6 +1047,12 @@ impl<B: BTreeTrait> BTree<B> {
                 .calc_cache(&mut self.root_cache, None);
         }
 
+        for leaf in to_remove {
+            self.remove_leaf(Cursor {
+                leaf: leaf.unwrap().into(),
+                offset: 0,
+            });
+        }
         splitted
     }
 
