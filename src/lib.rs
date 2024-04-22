@@ -364,7 +364,7 @@ impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for Node<B> {
     fn clone(&self) -> Self {
         Self {
             parent: self.parent,
-            parent_slot: u8::MAX,
+            parent_slot: self.parent_slot,
             children: self.children.clone(),
         }
     }
@@ -711,7 +711,7 @@ impl<B: BTreeTrait> BTree<B> {
             }
         }
 
-        if cursor.is_none() {
+        if cursor.is_none() && self.is_empty() {
             assert!(self.is_empty());
             let (new_root, _) = self.create_subtrees_from_elem(data);
             self.in_nodes.remove(self.root.unwrap()).unwrap();
@@ -721,7 +721,7 @@ impl<B: BTreeTrait> BTree<B> {
 
         // dbg!(cursor, &data);
         // dbg!(&self);
-        let cursor = cursor.unwrap();
+        let cursor = cursor.expect("Cursor must be provided when tree is not empty");
         let SplitInfo {
             new_pos,
             left_neighbour,
