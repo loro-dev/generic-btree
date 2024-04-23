@@ -371,7 +371,7 @@ impl<Elem: Clone, B: BTreeTrait<Elem = Elem>> Clone for Node<B> {
 }
 
 pub struct Child<B: ?Sized + BTreeTrait> {
-    arena: ArenaIndex,
+    pub arena: ArenaIndex,
     pub cache: B::Cache,
 }
 
