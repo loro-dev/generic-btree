@@ -1257,7 +1257,32 @@ impl<B: BTreeTrait> BTree<B> {
         let mut splitted = SplittedLeaves::default();
         let node = self.leaf_nodes.get_mut(node_idx.0).unwrap();
         let mut parent_idx = node.parent();
-        let (need_update_cache, new_insert_1, new_insert_2) = f(&mut node.elem);
+        let (need_update_cache, mut new_insert_1, mut new_insert_2) = f(&mut node.elem);
+        {
+            // Normalize returned values
+            // If the node can be removed, the new_insert_1 should be None
+            if node.elem.can_remove() {
+                if let Some(new_1) = new_insert_1 {
+                    node.elem = new_1;
+                    new_insert_1 = new_insert_2.take();
+                }
+            }
+
+            if let Some(ref new_1) = new_insert_1 {
+                if new_1.can_remove() {
+                    new_insert_1 = new_insert_2.take();
+                }
+            }
+
+            if let Some(ref new_2) = new_insert_2 {
+                if new_2.can_remove() {
+                    new_insert_2 = None;
+                } else if new_insert_1.is_none() {
+                    std::mem::swap(&mut new_insert_1, &mut new_insert_2);
+                }
+            }
+        }
+
         let deleted = node.elem.can_remove();
 
         if need_update_cache {
