@@ -1260,17 +1260,19 @@ impl<B: BTreeTrait> BTree<B> {
         let (need_update_cache, mut new_insert_1, mut new_insert_2) = f(&mut node.elem);
         {
             // Normalize returned values
-            // If the node can be removed, the new_insert_1 should be None
-            if node.elem.can_remove() {
-                if let Some(new_1) = new_insert_1 {
-                    node.elem = new_1;
-                    new_insert_1 = new_insert_2.take();
-                }
-            }
-
+            //
+            // If the node can be removed, then both new_insert_1 & new_insert_2 should be None
+            // The priority is node.elem > new_insert_1 > new_insert_2
+            //
+            // And new_insert_1 and new_insert_2 should not match `can_remove` condition
             if let Some(ref new_1) = new_insert_1 {
                 if new_1.can_remove() {
                     new_insert_1 = new_insert_2.take();
+                    if let Some(ref new_1) = new_insert_1 {
+                        if new_1.can_remove() {
+                            new_insert_1 = None;
+                        }
+                    }
                 }
             }
 
@@ -1279,6 +1281,13 @@ impl<B: BTreeTrait> BTree<B> {
                     new_insert_2 = None;
                 } else if new_insert_1.is_none() {
                     std::mem::swap(&mut new_insert_1, &mut new_insert_2);
+                }
+            }
+
+            if node.elem.can_remove() {
+                if let Some(new_1) = new_insert_1 {
+                    node.elem = new_1;
+                    new_insert_1 = new_insert_2.take();
                 }
             }
         }
