@@ -386,4 +386,23 @@ mod test {
             }
         }
     }
+
+    #[test]
+    #[ignore]
+    fn depth_test() {
+        let mut tree: OrdTreeSet<u64> = OrdTreeSet::new();
+        for i in 0..2_100_000 {
+            tree.insert(i as u64);
+            let m = (!i) + 1;
+            if (i & m) == i {
+                eprintln!(
+                    "i={}, Depth={}, Avg Children={}",
+                    i,
+                    tree.0.tree.depth(),
+                    tree.0.tree.internal_avg_children_num()
+                );
+            }
+        }
+        tree.check();
+    }
 }

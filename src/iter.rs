@@ -169,30 +169,30 @@ impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
             if start_arena == end_arena {
                 // parent is the same, delete start..end
                 let parent = self.tree.get_internal_mut(start_arena);
-                for x in &parent.children[del_start..del_end] {
+                for x in &parent.children[del_start as usize..del_end as usize] {
                     deleted.push(x.arena);
                 }
 
-                delete_range(&mut parent.children, del_start..del_end);
+                delete_range(&mut parent.children, del_start as usize..del_end as usize);
                 self.tree
-                    .update_children_parent_slot_from(start_arena, del_start);
+                    .update_children_parent_slot_from(start_arena, del_start as usize);
             } else {
                 // parent is different
                 {
                     // delete start..
                     let start_parent = self.tree.get_internal_mut(start_arena);
-                    for x in &start_parent.children[del_start..] {
+                    for x in &start_parent.children[del_start as usize..] {
                         deleted.push(x.arena);
                     }
-                    delete_range(&mut start_parent.children, del_start..);
+                    delete_range(&mut start_parent.children, del_start as usize..);
                 }
                 {
                     // delete ..end
                     let end_parent = self.tree.get_internal_mut(end_arena);
-                    for x in &end_parent.children[..del_end] {
+                    for x in &end_parent.children[..del_end as usize] {
                         deleted.push(x.arena);
                     }
-                    delete_range(&mut end_parent.children, ..del_end);
+                    delete_range(&mut end_parent.children, ..del_end as usize);
                     self.tree.update_children_parent_slot_from(end_arena, 0);
                 }
             }
@@ -207,13 +207,13 @@ impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
                 .get2_mut(start_path[level].arena, start_path[level - 1].arena);
             if child.is_empty() {
                 assert_eq!(
-                    parent.children[start_path[level].arr].arena,
+                    parent.children[start_path[level].arr as usize].arena,
                     start_path[level].arena
                 );
-                deleted.push(parent.children.remove(start_path[level].arr).arena);
+                deleted.push(parent.children.remove(start_path[level].arr as usize).arena);
                 self.tree.update_children_parent_slot_from(
                     start_path[level - 1].arena,
-                    start_path[level].arr,
+                    start_path[level].arr as usize,
                 );
             } else {
                 break;
