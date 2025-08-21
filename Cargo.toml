@@ -18,7 +18,7 @@ documentation = "https://docs.rs/generic-btree"
 [dependencies]
 arref = "0.1.0"
 fxhash = "0.2.1"
-heapless = "0.7.16"
+heapless = "0.9.1"
 itertools = "0.11.0"
 proc-macro2 = "1.0.67"
 thunderdome = { version = "0.6.2", package = "loro-thunderdome" }
@@ -26,13 +26,13 @@ thunderdome = { version = "0.6.2", package = "loro-thunderdome" }
 
 [dev-dependencies]
 arbitrary = { version = "1.2.3", features = ["derive"] }
-criterion = "0.4.0"
+criterion = "0.7.0"
 jumprope = "1.0.0"
 ahash = "0.8.11"
 rand = "0.8.5"
-color-backtrace = "0.5.1"
+color-backtrace = "0.7.0"
 ctor = "0.1.26"
-pprof = { version = "0.11.1", features = [
+pprof = { version = "0.15.0", features = [
     "flamegraph",
     "criterion",
     "frame-pointer",
