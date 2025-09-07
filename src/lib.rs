@@ -6,10 +6,10 @@ use std::collections::{BTreeSet, VecDeque};
 use std::ops::AddAssign;
 use std::{cmp::Ordering, mem::take, ops::RangeBounds};
 
-use fxhash::{FxHashMap, FxHashSet};
 pub(crate) use heapless::Vec as HeaplessVec;
 use itertools::Itertools;
 use rle::{CanRemove, TryInsert};
+use rustc_hash::{FxHashMap, FxHashSet};
 use thunderdome::Arena;
 use thunderdome::Index as RawArenaIndex;
 
