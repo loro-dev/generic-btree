@@ -1609,11 +1609,11 @@ impl<B: BTreeTrait> BTree<B> {
         })
     }
 
-    pub fn drain(&mut self, range: Range<QueryResult>) -> iter::Drain<B> {
+    pub fn drain(&mut self, range: Range<QueryResult>) -> iter::Drain<'_, B> {
         iter::Drain::new(self, Some(range.start), Some(range.end))
     }
 
-    pub fn drain_by_query<Q: Query<B>>(&mut self, range: Range<Q::QueryArg>) -> iter::Drain<B> {
+    pub fn drain_by_query<Q: Query<B>>(&mut self, range: Range<Q::QueryArg>) -> iter::Drain<'_, B> {
         let start = self.query::<Q>(&range.start);
         let end = self.query::<Q>(&range.end);
         iter::Drain::new(self, start, end)
@@ -2650,7 +2650,7 @@ impl<B: BTreeTrait> BTree<B> {
     pub fn iter_with_filter<'a, R: Default + Copy + AddAssign + 'a>(
         &'a self,
         mut f: impl FnMut(&B::Cache) -> (bool, R) + 'a,
-    ) -> impl Iterator<Item = (R, &'_ B::Elem)> + '_ {
+    ) -> impl Iterator<Item = (R, &'a B::Elem)> + 'a {
         let mut queue = VecDeque::new();
         queue.push_back((self.root, R::default()));
         std::iter::from_fn(move || {
