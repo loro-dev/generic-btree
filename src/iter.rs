@@ -1,14 +1,13 @@
 use crate::{
-    delete_range, rle::HasLength, ArenaIndex, BTree, BTreeTrait, Cursor, LeafNode, NodePath,
+    delete_range, rle::HasLength, ArenaIndex, BTree, BTreeTrait, LeafIndex, LeafNode, NodePath,
     QueryResult,
 };
 
 /// iterate node (not element) from the start path to the **inclusive** end path
 pub(super) struct Iter<'a, B: BTreeTrait> {
     tree: &'a BTree<B>,
-    inclusive_end: NodePath,
-    path: NodePath,
-    done: bool,
+    inclusive_end: LeafIndex,
+    current_leaf: Option<LeafIndex>,
 }
 
 struct TempStore {
@@ -20,10 +19,10 @@ struct TempStore {
 
 pub struct Drain<'a, B: BTreeTrait> {
     tree: &'a mut BTree<B>,
-    current_path: NodePath,
+    current_leaf: Option<LeafIndex>,
     done: bool,
-    end_cursor: Option<Cursor>,
-    store: Option<Box<TempStore>>,
+    end_leaf: Option<LeafIndex>,
+    store: Option<TempStore>,
 }
 
 impl<'a, B: BTreeTrait> Drain<'a, B> {
@@ -50,45 +49,48 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
                 .unwrap_or_else(|| tree.last_leaf().unwrap().into()),
         );
         let leaf_before_drain_range = {
-            let node_idx = start_path.last().unwrap().arena;
+            let leaf_idx = start_result.leaf;
             if start_result.offset == 0 {
-                tree.prev_same_level_in_node(node_idx)
+                tree.get_leaf(leaf_idx.into())
+                    .prev_leaf()
+                    .map(ArenaIndex::from)
             } else {
-                Some(node_idx)
+                Some(leaf_idx.into())
             }
         };
         let leaf_after_drain_range = {
-            let node_idx = end_path.last().unwrap().arena;
             if let Some(end) = end_result {
                 let len = tree.leaf_nodes.get(end.leaf.0).unwrap().elem.rle_len();
                 if len == end.offset {
-                    tree.next_same_level_in_node(node_idx)
+                    tree.get_leaf(end.leaf.into())
+                        .next_leaf()
+                        .map(ArenaIndex::from)
                 } else {
-                    Some(node_idx)
+                    Some(end.leaf.into())
                 }
             } else {
                 None
             }
         };
         Self {
-            current_path: tree.get_path(start_result.leaf.into()),
+            current_leaf: Some(start_result.leaf),
             tree,
             done: false,
-            end_cursor: end_result,
-            store: Some(Box::new(TempStore {
+            end_leaf: end_result.map(|x| x.leaf),
+            store: Some(TempStore {
                 start_path,
                 end_path,
                 leaf_before_drain_range,
                 leaf_after_drain_range,
-            })),
+            }),
         }
     }
 
-    fn none(tree: &'a mut BTree<B>) -> Drain<B> {
+    fn none(tree: &'a mut BTree<B>) -> Drain<'a, B> {
         Self {
-            current_path: Default::default(),
+            current_leaf: None,
             done: true,
-            end_cursor: None,
+            end_leaf: None,
             tree,
             store: None,
         }
@@ -103,24 +105,20 @@ impl<'a, B: BTreeTrait> Iterator for Drain<'a, B> {
             return None;
         }
 
-        // end iteration if pointing to the end leaf
-        if let Some(end_cursor) = self.end_cursor {
-            if end_cursor.leaf.0 == self.current_path.last().unwrap().arena.unwrap_leaf() {
-                return None;
-            }
+        let leaf_idx = self.current_leaf?;
+        if self.end_leaf == Some(leaf_idx) {
+            self.done = true;
+            return None;
         }
 
-        let idx = *self.current_path.last().unwrap();
-        if !self.tree.next_sibling(&mut self.current_path) {
+        let next_leaf = self.tree.get_leaf(leaf_idx.into()).next_leaf();
+        self.current_leaf = next_leaf;
+        if next_leaf.is_none() {
             self.done = true;
         }
 
-        // NOTE: we removed the node here, the tree is in an invalid state
-        let node = self
-            .tree
-            .leaf_nodes
-            .remove(idx.arena.unwrap_leaf())
-            .unwrap();
+        self.tree.unlink_leaf(leaf_idx);
+        let node = self.tree.leaf_nodes.remove(leaf_idx.0).unwrap();
         Some(node.elem)
     }
 }
@@ -134,12 +132,15 @@ impl<'a, B: BTreeTrait> Drain<'a, B> {
 impl<'a, B: BTreeTrait> Drop for Drain<'a, B> {
     fn drop(&mut self) {
         self.ensure_finished();
+        let Some(store) = self.store.take() else {
+            return;
+        };
         let TempStore {
             start_path,
             end_path,
             leaf_before_drain_range,
             leaf_after_drain_range,
-        } = *self.store.take().unwrap();
+        } = store;
         // the deepest internal node level
         let mut level = start_path.len() - 2;
         let mut deleted = Vec::new();
@@ -288,35 +289,26 @@ fn handle_lack_on_path_to_leaf<B: BTreeTrait>(tree: &mut BTree<B>, leaf: ArenaIn
 }
 
 impl<'a, B: BTreeTrait> Iter<'a, B> {
-    pub fn new(tree: &'a BTree<B>, start: NodePath, inclusive_end: NodePath) -> Self {
+    pub fn new(tree: &'a BTree<B>, start: LeafIndex, inclusive_end: LeafIndex) -> Self {
         Self {
             tree,
             inclusive_end,
-            path: start,
-            done: false,
+            current_leaf: Some(start),
         }
     }
 }
 
 impl<'a, B: BTreeTrait> Iterator for Iter<'a, B> {
-    type Item = (NodePath, &'a LeafNode<B::Elem>);
+    type Item = (LeafIndex, &'a LeafNode<B::Elem>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
-        }
-
-        if self.inclusive_end.last() == self.path.last() {
-            self.done = true;
-        }
-
-        let last = *self.path.last().unwrap();
-        let path = self.path.clone();
-        if !self.tree.next_sibling(&mut self.path) {
-            self.done = true;
-        }
-
-        let node = self.tree.leaf_nodes.get(last.arena.unwrap_leaf()).unwrap();
-        Some((path, node))
+        let leaf_idx = self.current_leaf?;
+        let node = self.tree.leaf_nodes.get(leaf_idx.0).unwrap();
+        self.current_leaf = if leaf_idx == self.inclusive_end {
+            None
+        } else {
+            node.next_leaf()
+        };
+        Some((leaf_idx, node))
     }
 }
