@@ -93,19 +93,13 @@ impl Rope {
             }
         }
 
-        let (q, f) = self.tree.query_with_finder_return::<LengthFinder>(&index);
+        let q = self.tree.query::<LengthFinder>(&index);
         self.cursor = q.and_then(|q| {
             if q.offset() == 0 {
-                if f.slot == 0 || f.parent.is_none() {
-                    None
-                } else {
-                    let node = self.tree.in_nodes.get(f.parent.unwrap()).unwrap();
-                    let child = &node.children[f.slot as usize - 1];
-                    Some(Cursor {
-                        pos: index - child.cache as usize,
-                        leaf: child.arena.unwrap().into(),
-                    })
-                }
+                self.tree.prev_elem(q.cursor()).map(|prev| Cursor {
+                    pos: index - self.tree.get_elem(prev.leaf).unwrap().len(),
+                    leaf: prev.leaf,
+                })
             } else {
                 Some(Cursor {
                     pos: index - q.offset(),
@@ -204,8 +198,9 @@ impl Rope {
     fn iter(&self) -> impl Iterator<Item = &GapBuffer> {
         let mut node_iter = self
             .tree
-            .first_path()
-            .map(|first| crate::iter::Iter::new(&self.tree, first, self.tree.last_path().unwrap()));
+            .first_leaf()
+            .zip(self.tree.last_leaf())
+            .map(|(first, last)| crate::iter::Iter::new(&self.tree, first, last));
         std::iter::from_fn(move || match &mut node_iter {
             Some(node_iter) => {
                 if let Some(node) = node_iter.next() {
@@ -236,7 +231,39 @@ impl Rope {
 
     #[allow(unused)]
     fn update_in_place(&mut self, pos: usize, new: &str) {
-        todo!()
+        let end = pos
+            .checked_add(new.len())
+            .expect("update_in_place overflowed usize");
+        if end > self.len() {
+            panic!(
+                "update_in_place out of range pos={} len={} rope_len={}",
+                pos,
+                new.len(),
+                self.len()
+            );
+        }
+
+        if new.is_empty() {
+            return;
+        }
+
+        let range = self
+            .tree
+            .range::<LengthFinder>(pos..end)
+            .expect("update_in_place range should exist");
+        let bytes = new.as_bytes();
+        let mut consumed = 0;
+        self.tree
+            .update(range.start.cursor..range.end.cursor, &mut |leaf| {
+                let len = leaf.len();
+                let next = consumed + len;
+                leaf.delete(..);
+                leaf.push_bytes(&bytes[consumed..next]).unwrap();
+                consumed = next;
+                None
+            });
+        debug_assert_eq!(consumed, bytes.len());
+        self.cursor = None;
     }
 
     pub fn clear(&mut self) {
@@ -384,7 +411,6 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn test_update() {
         let mut rope = Rope::new();
         rope.insert(0, "123");
@@ -427,7 +453,6 @@ mod test {
     }
 
     #[test]
-    #[ignore]
     fn test_update_1() {
         let mut rope = Rope::new();
         for i in 0..100 {
@@ -479,6 +504,84 @@ mod test {
         }
 
         assert_eq!(rope.to_string(), truth);
+    }
+
+    fn assert_rope_matches(rope: &Rope, expected: &str) {
+        rope.check();
+        assert_eq!(rope.len(), expected.len());
+        assert_eq!(rope.to_string(), expected);
+    }
+
+    fn collect_range(rope: &Rope, start: usize, end: usize) -> String {
+        if rope.is_empty() {
+            return String::new();
+        }
+
+        let range = rope.tree.range::<LengthFinder>(start..end).unwrap();
+        let mut bytes = Vec::new();
+        for slice in rope.tree.iter_range(range.start.cursor..range.end.cursor) {
+            let start = slice.start.unwrap_or(0);
+            let end = slice.end.unwrap_or(slice.elem.len());
+            let gap = slice.elem.slice(start..end);
+            let (left, right) = gap.as_bytes();
+            bytes.extend_from_slice(left);
+            bytes.extend_from_slice(right);
+        }
+
+        String::from_utf8(bytes).unwrap()
+    }
+
+    fn assert_partial_drain_matches(
+        rope: &Rope,
+        expected: &str,
+        start: usize,
+        end: usize,
+        consume: usize,
+    ) {
+        let mut shadow = Rope {
+            tree: rope.tree.clone(),
+            cursor: None,
+        };
+        let from = shadow.tree.query::<LengthFinder>(&start);
+        let to = shadow.tree.query::<LengthFinder>(&end);
+        let mut drain = crate::iter::Drain::new(&mut shadow.tree, from, to);
+        for _ in 0..consume {
+            if drain.next().is_none() {
+                break;
+            }
+        }
+        drop(drain);
+
+        let mut expected_after = expected.to_string();
+        expected_after.drain(start..end);
+        assert_rope_matches(&shadow, &expected_after);
+    }
+
+    fn random_ascii_chunk(rng: &mut rand::rngs::StdRng) -> String {
+        use rand::Rng;
+
+        let len = if rng.gen_bool(0.2) {
+            rng.gen_range(129..180)
+        } else {
+            rng.gen_range(1..16)
+        };
+        let alphabet = b"abcxyz0123456789_";
+        let mut s = String::with_capacity(len);
+        for _ in 0..len {
+            s.push(alphabet[rng.gen_range(0..alphabet.len())] as char);
+        }
+        s
+    }
+
+    fn random_ascii_chunk_with_len(rng: &mut rand::rngs::StdRng, len: usize) -> String {
+        use rand::Rng;
+
+        let alphabet = b"abcxyz0123456789_";
+        let mut s = String::with_capacity(len);
+        for _ in 0..len {
+            s.push(alphabet[rng.gen_range(0..alphabet.len())] as char);
+        }
+        s
     }
 
     #[test]
@@ -2740,6 +2843,82 @@ mod test {
             }
         }
         assert_eq!(rope.to_string(), expected);
+    }
+
+    #[test]
+    fn differential_random_edits() {
+        use rand::{Rng, SeedableRng};
+
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0xC0DE_CAFE);
+        let mut rope = Rope::new();
+        let mut expected = String::new();
+
+        for step in 0..400 {
+            let action = if expected.is_empty() {
+                0
+            } else {
+                rng.gen_range(0..5)
+            };
+
+            match action {
+                0 | 1 => {
+                    let pos = rng.gen_range(0..=expected.len());
+                    let chunk = random_ascii_chunk(&mut rng);
+                    expected.insert_str(pos, &chunk);
+                    rope.insert(pos, &chunk);
+                }
+                2 => {
+                    let start = rng.gen_range(0..=expected.len());
+                    let end = rng.gen_range(start..=expected.len());
+                    expected.drain(start..end);
+                    rope.delete_range(start..end);
+                }
+                3 => {
+                    let pos = expected.len() / 2;
+                    let chunk = random_ascii_chunk(&mut rng);
+                    expected.insert_str(pos, &chunk);
+                    rope.insert(pos, &chunk);
+                }
+                4 => {
+                    let start = rng.gen_range(0..expected.len());
+                    let len = rng.gen_range(1..=(expected.len() - start).min(24));
+                    let chunk = random_ascii_chunk_with_len(&mut rng, len);
+                    expected.replace_range(start..start + len, &chunk);
+                    rope.update_in_place(start, &chunk);
+                }
+                _ => unreachable!(),
+            }
+
+            assert_rope_matches(&rope, &expected);
+            if step % 17 == 0 {
+                test_index(&rope);
+            }
+
+            for _ in 0..3 {
+                let start = rng.gen_range(0..=expected.len());
+                let end = rng.gen_range(start..=expected.len());
+                assert_eq!(collect_range(&rope, start, end), expected[start..end]);
+            }
+
+            if !expected.is_empty() && step % 11 == 0 {
+                let start = rng.gen_range(0..=expected.len());
+                let end = rng.gen_range(start..=expected.len());
+                let consume = rng.gen_range(0..3);
+                assert_partial_drain_matches(&rope, &expected, start, end, consume);
+            }
+        }
+
+        test_index(&rope);
+    }
+
+    #[test]
+    fn test_update_across_leaves() {
+        let mut rope = Rope::new();
+        rope.insert(0, "abcdefghijklmnopqrst");
+        rope.update_in_place(5, "UVWXYZ12");
+        assert_eq!(&rope.to_string(), "abcdeUVWXYZ12nopqrst");
+        test_index(&rope);
+        rope.check();
     }
 
     #[test]

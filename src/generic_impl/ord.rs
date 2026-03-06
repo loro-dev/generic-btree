@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use std::ops::Range;
 
 use crate::rle::{CanRemove, HasLength, Mergeable, Sliceable, TryInsert};
-use crate::{BTree, BTreeTrait, FindResult, Query, SplitInfo};
+use crate::{ArenaIndex, BTree, BTreeTrait, FindResult, Query, SplitInfo};
 
 #[derive(Debug)]
 #[repr(transparent)]
@@ -53,15 +53,29 @@ impl<Key: Clone + Ord + Debug + 'static, Value: Clone + Debug + 'static> OrdTree
                 leaf.elem.merge_right(&data);
             } else {
                 // Insert new leaf node
-                let child = tree.alloc_leaf_child(data, parent.unwrap_internal());
                 let SplitInfo {
                     parent_idx: parent_index,
                     insert_slot: insert_index,
                     ..
                 } = tree.split_leaf_if_needed(result.cursor);
-                let parent = tree.in_nodes.get_mut(parent_index).unwrap();
-                parent.children.insert(insert_index, child).unwrap();
-                is_full = parent.is_full();
+                let (prev_leaf, next_leaf) =
+                    tree.leaf_neighbors_for_insert(parent_index, insert_index);
+                let child = tree.alloc_leaf_child(
+                    data,
+                    parent_index,
+                    insert_index as u8,
+                    prev_leaf,
+                    next_leaf,
+                );
+                is_full = {
+                    let parent = tree.in_nodes.get_mut(parent_index).unwrap();
+                    parent.children.insert(insert_index, child).unwrap();
+                    parent.is_full()
+                };
+                tree.update_children_parent_slot_from(
+                    ArenaIndex::Internal(parent_index),
+                    insert_index + 1,
+                );
             }
 
             tree.recursive_update_cache(parent, false, None);
