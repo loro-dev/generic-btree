@@ -96,10 +96,10 @@ impl Rope {
         let (q, f) = self.tree.query_with_finder_return::<LengthFinder>(&index);
         self.cursor = q.and_then(|q| {
             if q.offset() == 0 {
-                if f.slot == 0 || f.parent.is_none() {
+                if f.slot == 0 {
                     None
                 } else {
-                    let node = self.tree.in_nodes.get(f.parent.unwrap()).unwrap();
+                    let node = self.tree.in_nodes.get(f.parent?).unwrap();
                     let child = &node.children[f.slot as usize - 1];
                     Some(Cursor {
                         pos: index - child.cache as usize,
@@ -403,6 +403,42 @@ mod test {
         assert_eq!(&rope.to_string(), "");
         rope.insert(0, "kkk");
         assert_eq!(&rope.to_string(), "kkk");
+    }
+
+    #[test]
+    fn batch_insert_preserves_order_at_leaf_boundaries() {
+        let batch_tail = "z".repeat(MAX_STRING_SIZE);
+        let inserted = format!("xy{batch_tail}");
+        // Include a full parent and a tree spanning multiple parents.
+        for base_len in [
+            3,
+            MAX_STRING_SIZE,
+            MAX_STRING_SIZE * 11,
+            MAX_STRING_SIZE * 24,
+        ] {
+            let base: String = (0..base_len)
+                .map(|i| (b'a' + (i % 26) as u8) as char)
+                .collect();
+            for pos in 0..=base.len() {
+                let mut rope = Rope::new();
+                rope.insert(0, &base);
+                let cursor = rope.tree.query::<LengthFinder>(&pos).unwrap().cursor;
+                let chunks = GapBuffer::from_str("xy").chain(GapBuffer::from_str(&batch_tail));
+                rope.tree.insert_many_by_cursor(Some(cursor), chunks);
+
+                let mut expected = base.clone();
+                expected.insert_str(pos, &inserted);
+                assert_eq!(rope.to_string(), expected, "base {base_len}, pos {pos}");
+                assert_eq!(rope.len(), expected.len());
+                rope.check();
+                test_index(&rope);
+
+                rope.insert(rope.len(), "!");
+                expected.push('!');
+                assert_eq!(rope.to_string(), expected);
+                rope.check();
+            }
+        }
     }
 
     #[test]
